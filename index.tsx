@@ -65,6 +65,8 @@ let projectState: ProjectState = {
 };
 
 let audioBlobUrl: string | null = null;
+let instrumentalBlobUrl: string | null = null;
+let uploadedAudioFile: File | null = null;
 let masterPlaybackInterval: number | null = null;
 
 // --- DOM Elements ---
@@ -72,6 +74,9 @@ let masterPlaybackInterval: number | null = null;
 const audioInput = document.getElementById('audio-input') as HTMLInputElement;
 const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
 const audioDurationEl = document.getElementById('audio-duration') as HTMLElement;
+const vocalRemovalBtn = document.getElementById('vocal-removal-btn') as HTMLButtonElement;
+const vocalRemovalStatus = document.getElementById('vocal-removal-status') as HTMLElement;
+const instrumentalDownloadLink = document.getElementById('instrumental-download') as HTMLAnchorElement;
 
 const promptInput = document.getElementById('prompt-input') as HTMLTextAreaElement;
 const planButton = document.getElementById('plan-button') as HTMLButtonElement;
@@ -186,6 +191,93 @@ clearConsoleBtn.addEventListener('click', () => {
 
 // --- Helper Functions ---
 
+const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+const sharedAudioContext = AudioContextClass ? new AudioContextClass() : null;
+
+function updateVocalRemovalStatus(message: string, tone: 'neutral' | 'success' | 'warn' | 'error' = 'neutral') {
+    if (!vocalRemovalStatus) return;
+
+    const toneClass = tone === 'success' ? 'text-neon-green' : tone === 'warn' ? 'text-yellow-400' : tone === 'error' ? 'text-red-400' : 'text-gray-500';
+    vocalRemovalStatus.className = toneClass + ' text-[10px]';
+    vocalRemovalStatus.textContent = message;
+}
+
+async function decodeFileToAudioBuffer(file: File): Promise<AudioBuffer> {
+    if (!sharedAudioContext) {
+        throw new Error('Web Audio API is not supported in this browser.');
+    }
+
+    if (sharedAudioContext.state === 'suspended') {
+        await sharedAudioContext.resume();
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    return await sharedAudioContext.decodeAudioData(arrayBuffer.slice(0));
+}
+
+function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const samples = buffer.length;
+    const blockAlign = numChannels * (bitDepth / 8);
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = samples * blockAlign;
+    const bufferLength = 44 + dataSize;
+
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+
+    function writeString(offset: number, str: string) {
+        for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+        }
+    }
+
+    function writeUint16(offset: number, value: number) {
+        view.setUint16(offset, value, true);
+    }
+
+    function writeUint32(offset: number, value: number) {
+        view.setUint32(offset, value, true);
+    }
+
+    writeString(0, 'RIFF');
+    writeUint32(4, 36 + dataSize);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    writeUint32(16, 16); // Subchunk1Size for PCM
+    writeUint16(20, format);
+    writeUint16(22, numChannels);
+    writeUint32(24, sampleRate);
+    writeUint32(28, byteRate);
+    writeUint16(32, blockAlign);
+    writeUint16(34, bitDepth);
+    writeString(36, 'data');
+    writeUint32(40, dataSize);
+
+    // Interleave channels
+    const channelData: Float32Array[] = [];
+    for (let channel = 0; channel < numChannels; channel++) {
+        channelData.push(buffer.getChannelData(channel));
+    }
+
+    let offset = 44;
+    for (let i = 0; i < samples; i++) {
+        for (let channel = 0; channel < numChannels; channel++) {
+            let sample = channelData[channel][i];
+            sample = Math.max(-1, Math.min(1, sample));
+            const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+            view.setInt16(offset, intSample, true);
+            offset += 2;
+        }
+    }
+
+    return arrayBuffer;
+}
+
 async function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -287,12 +379,21 @@ function saveState() {
 
 audioInput.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
-    if (file) {
-        audioBlobUrl = URL.createObjectURL(file);
-        audioEl.src = audioBlobUrl;
-        audioEl.load();
-        log(`Audio loaded: ${file.name}`, 'success');
+    if (!file) return;
+
+    uploadedAudioFile = file;
+
+    if (audioBlobUrl) {
+        URL.revokeObjectURL(audioBlobUrl);
     }
+
+    audioBlobUrl = URL.createObjectURL(file);
+    audioEl.src = audioBlobUrl;
+    audioEl.load();
+    instrumentalBlobUrl = null;
+    instrumentalDownloadLink.classList.add('hidden');
+    updateVocalRemovalStatus('Creates an instrumental by reducing vocals. Works best on stereo tracks.', 'neutral');
+    log(`Audio loaded: ${file.name}`, 'success');
 });
 
 audioEl.addEventListener('loadedmetadata', () => {
@@ -301,6 +402,80 @@ audioEl.addEventListener('loadedmetadata', () => {
     totalTimeEl.textContent = formatTime(projectState.audioDuration);
     saveState();
 });
+
+async function createInstrumentalBuffer(buffer: AudioBuffer): Promise<AudioBuffer> {
+    if (buffer.numberOfChannels < 2) {
+        throw new Error('Instrumental generation works best with stereo audio.');
+    }
+
+    const left = buffer.getChannelData(0);
+    const right = buffer.getChannelData(1);
+
+    const instrumentalBuffer = new AudioBuffer({
+        length: buffer.length,
+        numberOfChannels: 2,
+        sampleRate: buffer.sampleRate
+    });
+
+    const outLeft = instrumentalBuffer.getChannelData(0);
+    const outRight = instrumentalBuffer.getChannelData(1);
+
+    for (let i = 0; i < buffer.length; i++) {
+        const centerRemoved = (left[i] - right[i]) * 0.5;
+        outLeft[i] = centerRemoved;
+        outRight[i] = -centerRemoved;
+    }
+
+    return instrumentalBuffer;
+}
+
+async function handleVocalRemoval() {
+    if (!uploadedAudioFile) {
+        alert('Upload an audio file first.');
+        return;
+    }
+
+    if (!vocalRemovalBtn) return;
+
+    try {
+        vocalRemovalBtn.disabled = true;
+        vocalRemovalBtn.textContent = 'Muting vocals...';
+        updateVocalRemovalStatus('Processing track to reduce vocals. This may take a moment...', 'neutral');
+        log('Starting vocal reduction...', 'info');
+
+        const decoded = await decodeFileToAudioBuffer(uploadedAudioFile);
+        const instrumental = await createInstrumentalBuffer(decoded);
+        const wavArrayBuffer = audioBufferToWav(instrumental);
+        const instrumentalBlob = new Blob([wavArrayBuffer], { type: 'audio/wav' });
+
+        if (instrumentalBlobUrl) {
+            URL.revokeObjectURL(instrumentalBlobUrl);
+        }
+
+        instrumentalBlobUrl = URL.createObjectURL(instrumentalBlob);
+        audioBlobUrl = instrumentalBlobUrl;
+        audioEl.src = instrumentalBlobUrl;
+        audioEl.load();
+
+        instrumentalDownloadLink.href = instrumentalBlobUrl;
+        instrumentalDownloadLink.classList.remove('hidden');
+        updateVocalRemovalStatus('Vocals reduced. Download or play the instrumental version.', 'success');
+        log('Vocal reduction complete. Instrumental ready.', 'success');
+    } catch (err) {
+        console.error(err);
+        updateVocalRemovalStatus(err instanceof Error ? err.message : 'Failed to process audio.', 'error');
+        log('Vocal reduction failed.', 'error', { err: String(err) });
+    } finally {
+        vocalRemovalBtn.disabled = false;
+        vocalRemovalBtn.textContent = 'Mute explicit lyrics (keep the music)';
+    }
+}
+
+if (vocalRemovalBtn) {
+    vocalRemovalBtn.addEventListener('click', () => {
+        handleVocalRemoval();
+    });
+}
 
 // --- Settings Handling ---
 
