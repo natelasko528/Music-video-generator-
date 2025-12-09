@@ -1,14 +1,50 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
-    <title>AI Music Video Production Suite</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0a0a0f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Director's Cut - AI Music Video Suite</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              cyber: {
+                950: '#0a0a0f',
+                900: '#0f0f18',
+                800: '#151520',
+                700: '#1a1a28',
+                600: '#252535',
+              },
+              neon: {
+                blue: '#00d4ff',
+                purple: '#a855f7',
+                pink: '#ec4899',
+                green: '#22c55e',
+              }
+            },
+            fontFamily: {
+              display: ['Space Grotesk', 'system-ui', 'sans-serif'],
+              mono: ['JetBrains Mono', 'Roboto Mono', 'monospace'],
+            },
+            animation: {
+              'glow': 'glow 2s ease-in-out infinite alternate',
+              'float': 'float 3s ease-in-out infinite',
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'gradient': 'gradient 8s linear infinite',
+              'shimmer': 'shimmer 2s linear infinite',
+            }
+          }
+        }
+      }
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&family=Permanent+Marker&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="index.css" />
     <script type="importmap">
       {
@@ -19,181 +55,401 @@
     </script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   </head>
-  <body class="bg-[#0a0a0a] font-['Inter'] text-gray-300 antialiased min-h-screen pb-32 flex flex-col overflow-hidden">
-    
+  <body class="bg-cyber-950 font-display text-gray-300 antialiased min-h-screen overflow-x-hidden">
+
+    <!-- Animated Background -->
+    <div class="fixed inset-0 pointer-events-none overflow-hidden">
+      <div class="absolute -top-1/2 -left-1/2 w-full h-full bg-gradient-to-br from-neon-blue/5 via-transparent to-transparent rounded-full blur-3xl animate-pulse-slow"></div>
+      <div class="absolute -bottom-1/2 -right-1/2 w-full h-full bg-gradient-to-tl from-neon-purple/5 via-transparent to-transparent rounded-full blur-3xl animate-pulse-slow" style="animation-delay: 1.5s;"></div>
+      <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_transparent_0%,_#0a0a0f_70%)]"></div>
+    </div>
+
     <!-- App Container -->
-    <div class="h-screen flex flex-col p-4 md:p-6 gap-4">
-      
-      <!-- Header -->
-      <div class="flex-shrink-0 flex flex-col md:flex-row justify-between items-end border-b border-gray-800 pb-4 gap-4">
-        <div>
-            <h1 class="text-3xl md:text-4xl font-bold text-white tracking-tight font-['Permanent_Marker'] text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500">
-            Director's Cut
-            </h1>
-            <p class="text-gray-500 text-xs mt-1 font-mono">
-            AI Production Suite • Gemini 3.0 • Veo 3.1 • v2.0-debug
-            </p>
-        </div>
-        <div class="flex gap-3 items-center">
-             <div class="flex items-center gap-2 mr-4 bg-gray-900 border border-gray-800 rounded px-2 py-1">
-                <span class="text-[10px] text-gray-500 uppercase font-bold">Transition</span>
-                <select id="transition-select" class="bg-transparent text-xs text-white border-none focus:ring-0 cursor-pointer">
-                    <option value="cut">Hard Cut</option>
-                    <option value="crossfade">Crossfade</option>
-                    <option value="fadeblack">Fade to Black</option>
-                </select>
-             </div>
-             <button id="clear-project" class="text-xs text-red-400 hover:text-red-300 border border-red-900/30 bg-red-900/10 px-3 py-2 rounded">
-                Reset
-             </button>
-             <div class="text-right">
-                <span id="save-status" class="text-xs font-mono text-gray-600 block">Auto-save active</span>
-             </div>
-        </div>
-      </div>
+    <div class="relative min-h-screen flex flex-col">
 
-      <!-- Main Workspace Grid -->
-      <div class="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0">
-        
-        <!-- Left Column: Assets & Config (Width: 3/12) -->
-        <div class="lg:col-span-3 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
-          
-          <!-- 1. Audio Assets -->
-          <div class="bg-[#161616] p-3 rounded-xl border border-gray-800 shadow-lg">
-             <h3 class="text-white text-xs font-semibold mb-2 flex items-center gap-2 uppercase tracking-wider text-gray-500">
-                1. Audio Source
-             </h3>
-             <input id="audio-input" type="file" accept="audio/*" class="w-full text-xs text-gray-500 file:mr-4 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-gray-800 file:text-gray-300 hover:file:bg-gray-700 transition-colors"/>
-             <div class="mt-2 flex justify-between text-xs font-mono text-gray-500">
-                <span id="audio-duration">00:00</span>
-             </div>
-             <audio id="audio-element" class="hidden"></audio>
-          </div>
-
-          <!-- 2. Settings -->
-          <div class="bg-[#161616] p-3 rounded-xl border border-gray-800 space-y-3 shadow-lg">
-            <h3 class="text-white text-xs font-semibold uppercase tracking-wider text-gray-500">
-               2. Production Settings
-            </h3>
-            
-            <div class="grid grid-cols-2 gap-2">
-                <div>
-                    <label class="block text-[10px] text-gray-500 mb-1">Aspect Ratio</label>
-                    <select id="aspect-ratio" class="w-full bg-[#0a0a0a] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-yellow-500">
-                        <option value="16:9">16:9 (Cinematic)</option>
-                        <option value="9:16">9:16 (Social)</option>
-                        <option value="1:1">1:1 (Square)</option>
-                    </select>
-                </div>
-                 <div>
-                    <label class="block text-[10px] text-gray-500 mb-1">Clip Length</label>
-                    <select id="clip-length" class="w-full bg-[#0a0a0a] border border-gray-700 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-yellow-500">
-                        <option value="5">5s (Standard)</option>
-                        <option value="3">3s (Fast)</option>
-                        <option value="8">8s (Long)</option>
-                    </select>
-                </div>
+      <!-- Mobile Header -->
+      <header class="sticky top-0 z-50 backdrop-blur-xl bg-cyber-950/80 border-b border-white/5">
+        <div class="px-4 py-3 flex items-center justify-between">
+          <!-- Logo -->
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-neon-blue via-neon-purple to-neon-pink flex items-center justify-center shadow-lg shadow-neon-purple/20">
+              <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
             </div>
-
             <div>
-                <label class="block text-[10px] text-gray-500 mb-1">Visual Style Ref (Optional)</label>
-                <input id="style-image" type="file" accept="image/*" class="w-full text-xs text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:text-[10px] file:font-semibold file:bg-gray-800 file:text-gray-300"/>
-                <img id="style-preview" class="mt-2 w-full h-24 object-cover rounded hidden border border-gray-700" />
+              <h1 class="text-lg font-bold text-white tracking-tight">Director's Cut</h1>
+              <p class="text-[10px] text-gray-500 font-mono">Gemini 3.0 + Veo 3.1</p>
             </div>
           </div>
 
-          <!-- 3. Lyrics -->
-          <div class="bg-[#161616] flex flex-col p-3 rounded-xl border border-gray-800 shadow-lg flex-grow">
-            <h3 class="text-white text-xs font-semibold mb-2 uppercase tracking-wider text-gray-500">
-               3. Lyrics / Vibe
-            </h3>
-            <textarea id="prompt-input" class="w-full bg-[#0a0a0a] border border-gray-700 rounded p-3 text-xs text-gray-300 focus:outline-none focus:border-yellow-500 font-mono resize-none h-40" placeholder="Paste lyrics here or describe the visual vibe..."></textarea>
-            
-            <button id="plan-button" class="mt-3 w-full bg-blue-600 hover:bg-blue-500 text-white font-medium py-2 px-4 rounded text-xs transition-colors shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
-                Plan Storyboard
+          <!-- Status & Menu -->
+          <div class="flex items-center gap-2">
+            <span id="save-status" class="text-[10px] font-mono text-neon-green hidden sm:block">Saved</span>
+            <button id="clear-project" class="w-9 h-9 rounded-lg bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 hover:bg-red-500/20 transition-all active:scale-95">
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
             </button>
           </div>
         </div>
 
-        <!-- Middle Column: Timeline (Width: 5/12) -->
-        <div class="lg:col-span-5 flex flex-col min-h-0">
-             <div class="flex items-center justify-between mb-2 px-1">
-                <h3 class="text-white text-sm font-semibold flex items-center gap-2">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-                    Storyboard Timeline
-                </h3>
-                <button id="render-all-btn" disabled class="bg-green-600 disabled:bg-gray-800 disabled:text-gray-500 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-medium flex items-center gap-2 transition-all">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                    Render All Scenes
+        <!-- Mobile Tab Navigation -->
+        <div class="px-4 pb-2 flex gap-2 overflow-x-auto hide-scrollbar lg:hidden">
+          <button data-tab="setup" class="tab-btn active flex-shrink-0 px-4 py-2 rounded-full text-xs font-medium transition-all">
+            Setup
+          </button>
+          <button data-tab="timeline" class="tab-btn flex-shrink-0 px-4 py-2 rounded-full text-xs font-medium transition-all">
+            Timeline
+          </button>
+          <button data-tab="preview" class="tab-btn flex-shrink-0 px-4 py-2 rounded-full text-xs font-medium transition-all">
+            Preview
+          </button>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <main class="flex-1 flex flex-col lg:flex-row lg:p-6 lg:gap-6">
+
+        <!-- Setup Panel (Mobile Tab 1) -->
+        <section id="panel-setup" class="mobile-panel lg:w-80 lg:flex-shrink-0 lg:block p-4 lg:p-0 space-y-4">
+
+          <!-- Audio Upload Card -->
+          <div class="glass-card p-4 rounded-2xl">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-neon-blue/20 flex items-center justify-center">
+                <svg class="w-4 h-4 text-neon-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold text-white">Audio Source</h3>
+                <p class="text-[10px] text-gray-500">Upload your track</p>
+              </div>
+            </div>
+
+            <label class="block">
+              <div class="relative group cursor-pointer">
+                <input id="audio-input" type="file" accept="audio/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                <div class="border-2 border-dashed border-gray-700 group-hover:border-neon-blue/50 rounded-xl p-6 text-center transition-all group-hover:bg-neon-blue/5">
+                  <div class="w-12 h-12 mx-auto mb-3 rounded-full bg-gray-800 flex items-center justify-center group-hover:scale-110 transition-transform">
+                    <svg class="w-6 h-6 text-gray-400 group-hover:text-neon-blue transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                  </div>
+                  <p class="text-xs text-gray-400">Tap to upload audio</p>
+                  <p class="text-[10px] text-gray-600 mt-1">MP3, WAV, M4A supported</p>
+                </div>
+              </div>
+            </label>
+
+            <div class="mt-3 flex items-center justify-between">
+              <span class="text-[10px] font-mono text-gray-500">Duration</span>
+              <span id="audio-duration" class="text-xs font-mono text-neon-blue">00:00</span>
+            </div>
+            <audio id="audio-element" class="hidden"></audio>
+          </div>
+
+          <!-- Production Settings Card -->
+          <div class="glass-card p-4 rounded-2xl">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-neon-purple/20 flex items-center justify-center">
+                <svg class="w-4 h-4 text-neon-purple" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold text-white">Settings</h3>
+                <p class="text-[10px] text-gray-500">Configure output</p>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <!-- Aspect Ratio -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Aspect Ratio</label>
+                <div class="grid grid-cols-3 gap-2">
+                  <button class="aspect-btn active" data-value="16:9">
+                    <span class="block w-6 h-3.5 border border-current rounded-sm mb-1 mx-auto"></span>
+                    <span class="text-[10px]">16:9</span>
+                  </button>
+                  <button class="aspect-btn" data-value="9:16">
+                    <span class="block w-3.5 h-6 border border-current rounded-sm mb-1 mx-auto"></span>
+                    <span class="text-[10px]">9:16</span>
+                  </button>
+                  <button class="aspect-btn" data-value="1:1">
+                    <span class="block w-5 h-5 border border-current rounded-sm mb-1 mx-auto"></span>
+                    <span class="text-[10px]">1:1</span>
+                  </button>
+                </div>
+                <select id="aspect-ratio" class="hidden">
+                  <option value="16:9">16:9 (Cinematic)</option>
+                  <option value="9:16">9:16 (Social)</option>
+                  <option value="1:1">1:1 (Square)</option>
+                </select>
+              </div>
+
+              <!-- Clip Length -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Clip Length</label>
+                <div class="flex gap-2">
+                  <button class="clip-btn" data-value="3">3s</button>
+                  <button class="clip-btn active" data-value="5">5s</button>
+                  <button class="clip-btn" data-value="8">8s</button>
+                </div>
+                <select id="clip-length" class="hidden">
+                  <option value="5">5s (Standard)</option>
+                  <option value="3">3s (Fast)</option>
+                  <option value="8">8s (Long)</option>
+                </select>
+              </div>
+
+              <!-- Transition -->
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Transition</label>
+                <select id="transition-select" class="w-full bg-cyber-800 border border-gray-700/50 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-neon-blue/50 focus:ring-1 focus:ring-neon-blue/20 transition-all">
+                  <option value="cut">Hard Cut</option>
+                  <option value="crossfade">Crossfade</option>
+                  <option value="fadeblack">Fade to Black</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Style Reference Card -->
+          <div class="glass-card p-4 rounded-2xl">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-neon-pink/20 flex items-center justify-center">
+                <svg class="w-4 h-4 text-neon-pink" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold text-white">Style Reference</h3>
+                <p class="text-[10px] text-gray-500">Optional visual guide</p>
+              </div>
+            </div>
+
+            <label class="block">
+              <div class="relative group cursor-pointer">
+                <input id="style-image" type="file" accept="image/*" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                <div id="style-upload-area" class="border border-dashed border-gray-700 group-hover:border-neon-pink/50 rounded-xl p-4 text-center transition-all group-hover:bg-neon-pink/5">
+                  <svg class="w-6 h-6 mx-auto text-gray-500 group-hover:text-neon-pink transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  <p class="text-[10px] text-gray-500 mt-2">Add reference image</p>
+                </div>
+              </div>
+            </label>
+            <img id="style-preview" class="mt-3 w-full h-24 object-cover rounded-xl hidden border border-gray-700/50" />
+          </div>
+
+          <!-- Lyrics/Vibe Card -->
+          <div class="glass-card p-4 rounded-2xl">
+            <div class="flex items-center gap-3 mb-4">
+              <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-neon-blue/20 to-neon-purple/20 flex items-center justify-center">
+                <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-sm font-semibold text-white">Creative Brief</h3>
+                <p class="text-[10px] text-gray-500">Lyrics or visual vibe</p>
+              </div>
+            </div>
+
+            <textarea id="prompt-input" class="w-full bg-cyber-800/50 border border-gray-700/50 rounded-xl p-3 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-neon-blue/50 focus:ring-1 focus:ring-neon-blue/20 font-mono resize-none h-32 transition-all" placeholder="Paste lyrics or describe the visual style you want..."></textarea>
+
+            <button id="plan-button" class="mt-4 w-full relative overflow-hidden group">
+              <div class="absolute inset-0 bg-gradient-to-r from-neon-blue via-neon-purple to-neon-pink opacity-100 group-hover:opacity-90 transition-opacity"></div>
+              <div class="absolute inset-0 bg-gradient-to-r from-neon-blue via-neon-purple to-neon-pink blur-xl opacity-50 group-hover:opacity-70 transition-opacity"></div>
+              <div class="relative flex items-center justify-center gap-2 py-3 px-4 text-white font-semibold text-sm">
+                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Generate Storyboard
+              </div>
+            </button>
+          </div>
+        </section>
+
+        <!-- Timeline Panel (Mobile Tab 2) -->
+        <section id="panel-timeline" class="mobile-panel hidden lg:flex flex-1 flex-col p-4 lg:p-0">
+
+          <div class="glass-card flex-1 flex flex-col rounded-2xl overflow-hidden">
+            <!-- Timeline Header -->
+            <div class="p-4 border-b border-white/5 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-neon-green/20 flex items-center justify-center">
+                  <svg class="w-4 h-4 text-neon-green" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 class="text-sm font-semibold text-white">Storyboard</h3>
+                  <p class="text-[10px] text-gray-500">Scene timeline</p>
+                </div>
+              </div>
+
+              <button id="render-all-btn" disabled class="px-4 py-2 rounded-xl text-xs font-medium flex items-center gap-2 transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-neon-green/20 text-neon-green hover:bg-neon-green/30 disabled:hover:bg-neon-green/20">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Render All
+              </button>
+            </div>
+
+            <!-- Scene List -->
+            <div id="scene-container" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+              <!-- Empty State -->
+              <div class="h-full flex flex-col items-center justify-center text-center py-12">
+                <div class="w-20 h-20 rounded-2xl bg-cyber-800 flex items-center justify-center mb-4">
+                  <svg class="w-10 h-10 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" />
+                  </svg>
+                </div>
+                <h4 class="text-sm font-medium text-gray-400 mb-1">No Scenes Yet</h4>
+                <p class="text-xs text-gray-600 max-w-[200px]">Upload audio and generate a storyboard to see your scenes here</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Preview Panel (Mobile Tab 3) -->
+        <section id="panel-preview" class="mobile-panel hidden lg:flex lg:w-96 lg:flex-shrink-0 flex-col p-4 lg:p-0 gap-4">
+
+          <!-- Video Player -->
+          <div class="glass-card rounded-2xl overflow-hidden">
+            <div class="relative aspect-video bg-black group">
+              <!-- Video Layers -->
+              <video id="video-layer-1" class="absolute inset-0 w-full h-full object-contain transition-opacity duration-1000 z-10 opacity-100" playsinline muted></video>
+              <video id="video-layer-2" class="absolute inset-0 w-full h-full object-contain transition-opacity duration-1000 z-0 opacity-0" playsinline muted></video>
+
+              <!-- Play Button Overlay -->
+              <div class="absolute inset-0 flex items-center justify-center z-20">
+                <button id="play-pause-master" class="w-16 h-16 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center hover:bg-white/20 hover:scale-110 transition-all active:scale-95 opacity-0 group-hover:opacity-100">
+                  <svg id="icon-play" class="w-8 h-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  <svg id="icon-pause" class="w-8 h-8 text-white hidden" fill="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="4" width="4" height="16"></rect>
+                    <rect x="14" y="4" width="4" height="16"></rect>
+                  </svg>
                 </button>
-             </div>
-             
-             <div id="scene-container" class="flex-grow overflow-y-auto space-y-2 pr-2 custom-scrollbar pb-20">
-                <!-- Scenes injected here -->
-                <div class="h-full flex flex-col items-center justify-center text-gray-700 border border-dashed border-gray-800 rounded-xl">
-                    <p class="text-sm">Timeline Empty</p>
-                    <p class="text-xs mt-1">Upload audio & plan storyboard to begin</p>
-                </div>
-             </div>
-        </div>
+              </div>
 
-        <!-- Right Column: Player & Console (Width: 4/12) -->
-        <div class="lg:col-span-4 flex flex-col gap-4 min-h-0">
-            
-            <!-- Video Player -->
-            <div class="bg-black rounded-xl overflow-hidden shadow-2xl border border-gray-800 aspect-video relative group">
-                <!-- Dual Video Layers for seamless transitions -->
-                <video id="video-layer-1" class="absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 z-10 opacity-100" playsinline muted></video>
-                <video id="video-layer-2" class="absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 z-0 opacity-0" playsinline muted></video>
-                
-                <!-- Overlay UI -->
-                <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <button id="play-pause-master" class="pointer-events-auto w-16 h-16 bg-white/10 backdrop-blur-sm rounded-full flex items-center justify-center hover:bg-white/20 transition-all transform hover:scale-105 group-hover:opacity-100 opacity-0 transition-opacity">
-                         <svg id="icon-play" class="ml-1 text-white fill-white" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                         <svg id="icon-pause" class="hidden text-white fill-white" xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>
-                    </button>
+              <!-- Now Playing -->
+              <div class="absolute top-3 left-3 right-3 z-20">
+                <div id="now-playing-text" class="inline-flex items-center gap-2 text-[10px] text-white/80 font-mono bg-black/60 backdrop-blur-md px-2.5 py-1.5 rounded-lg">
+                  <span class="w-1.5 h-1.5 rounded-full bg-neon-green animate-pulse"></span>
+                  Ready to play
                 </div>
+              </div>
 
-                <!-- Scene Info Overlay -->
-                <div class="absolute top-4 left-4 right-4 flex justify-between items-start pointer-events-none">
-                    <div id="now-playing-text" class="text-[10px] text-white/80 font-mono bg-black/50 px-2 py-1 rounded backdrop-blur-md">
-                        Ready to play
-                    </div>
+              <!-- Progress Bar -->
+              <div class="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent z-20">
+                <div class="w-full h-1 bg-white/20 rounded-full overflow-hidden mb-2">
+                  <div id="progress-bar" class="h-full bg-gradient-to-r from-neon-blue to-neon-purple w-0 transition-all duration-100 rounded-full"></div>
                 </div>
-
-                <!-- Controls Bottom -->
-                <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent p-4 pt-12">
-                     <!-- Progress -->
-                     <div class="w-full bg-gray-700/50 h-1 rounded-full mb-2 overflow-hidden">
-                        <div id="progress-bar" class="h-full bg-yellow-500 w-0 transition-all duration-100"></div>
-                     </div>
-                     <div class="flex justify-between text-[10px] font-mono text-gray-400">
-                        <span id="current-time">00:00</span>
-                        <span id="total-time">00:00</span>
-                     </div>
+                <div class="flex justify-between text-[10px] font-mono text-white/60">
+                  <span id="current-time">00:00</span>
+                  <span id="total-time">00:00</span>
                 </div>
+              </div>
             </div>
+          </div>
 
-            <!-- Debug Console -->
-            <div class="flex-grow flex flex-col bg-[#0f0f0f] border border-gray-800 rounded-xl overflow-hidden shadow-lg min-h-0">
-                <div class="bg-[#1a1a1a] px-3 py-2 border-b border-gray-800 flex justify-between items-center">
-                    <span class="text-[10px] uppercase font-mono font-bold text-gray-500 flex items-center gap-2">
-                        <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                        Debug Console
-                    </span>
-                    <button id="clear-console" class="text-[10px] text-gray-600 hover:text-gray-400">Clear</button>
-                </div>
-                <div id="debug-output" class="flex-grow p-2 font-mono text-[10px] overflow-y-auto custom-scrollbar space-y-1">
-                    <div class="text-gray-500">System initialized. Waiting for input...</div>
-                </div>
+          <!-- Debug Console -->
+          <div class="glass-card flex-1 flex flex-col rounded-2xl overflow-hidden min-h-[200px]">
+            <div class="px-4 py-3 border-b border-white/5 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-neon-green animate-pulse"></div>
+                <span class="text-[10px] uppercase font-mono font-semibold text-gray-500 tracking-wider">Console</span>
+              </div>
+              <button id="clear-console" class="text-[10px] text-gray-600 hover:text-gray-400 transition-colors">Clear</button>
             </div>
+            <div id="debug-output" class="flex-1 p-3 font-mono text-[10px] overflow-y-auto custom-scrollbar space-y-1 bg-cyber-950/50">
+              <div class="text-gray-500">System initialized. Waiting for input...</div>
+            </div>
+          </div>
+        </section>
 
+      </main>
+
+      <!-- Mobile Bottom Navigation -->
+      <nav class="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-cyber-950/90 backdrop-blur-xl border-t border-white/5 safe-area-bottom">
+        <div class="flex items-center justify-around py-2">
+          <button data-tab="setup" class="bottom-nav-btn active flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+            </svg>
+            <span class="text-[10px] font-medium">Setup</span>
+          </button>
+          <button data-tab="timeline" class="bottom-nav-btn flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+            </svg>
+            <span class="text-[10px] font-medium">Timeline</span>
+          </button>
+          <button data-tab="preview" class="bottom-nav-btn flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all">
+            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="text-[10px] font-medium">Preview</span>
+          </button>
         </div>
-
-      </div>
+      </nav>
 
     </div>
+
+    <!-- Tab Navigation Script -->
+    <script>
+      // Mobile tab navigation
+      document.querySelectorAll('[data-tab]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const tab = btn.dataset.tab;
+
+          // Update tab buttons
+          document.querySelectorAll('.tab-btn, .bottom-nav-btn').forEach(b => {
+            b.classList.toggle('active', b.dataset.tab === tab);
+          });
+
+          // Update panels
+          document.querySelectorAll('.mobile-panel').forEach(panel => {
+            const panelId = panel.id.replace('panel-', '');
+            if (panelId === tab) {
+              panel.classList.remove('hidden');
+              panel.classList.add('flex', 'flex-col');
+            } else {
+              panel.classList.add('hidden');
+              panel.classList.remove('flex', 'flex-col');
+            }
+          });
+        });
+      });
+
+      // Aspect ratio buttons
+      document.querySelectorAll('.aspect-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById('aspect-ratio').value = btn.dataset.value;
+          document.getElementById('aspect-ratio').dispatchEvent(new Event('change'));
+        });
+      });
+
+      // Clip length buttons
+      document.querySelectorAll('.clip-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.clip-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          document.getElementById('clip-length').value = btn.dataset.value;
+          document.getElementById('clip-length').dispatchEvent(new Event('change'));
+        });
+      });
+    </script>
 
     <script type="module" src="index.tsx"></script>
   </body>
