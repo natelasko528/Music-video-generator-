@@ -1,7 +1,7 @@
 // Main Entry Point
 
 import { getElements } from './ui/elements';
-import { initLogger, clearLogs } from './logging/logger';
+import { initLogger, clearLogs, log } from './logging/logger';
 import { initState, restoreUIState } from './state/state';
 import { setupAudioHandlers, setupSettingsHandlers } from './ui/handlers';
 import { renderSceneList, setupPreviewHandler } from './ui/timeline';

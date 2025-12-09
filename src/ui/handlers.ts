@@ -4,21 +4,25 @@ import { projectState, saveState, setAudioBlobUrl, clearProject } from '../state
 import { blobToBase64, formatTime } from '../utils/helpers';
 import { log } from '../logging/logger';
 import type { UIElements } from './elements';
+import type { ProjectState } from '../types';
 
 export function setupAudioHandlers(elements: UIElements) {
-    elements.audioInput.addEventListener('change', (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (file) {
-            try {
-                const blobUrl = URL.createObjectURL(file);
-                setAudioBlobUrl(blobUrl);
-                elements.audioEl.src = blobUrl;
-                elements.audioEl.load();
-                log(`Audio loaded: ${file.name}`, 'success');
-            } catch (error) {
-                log(`Failed to load audio: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-                alert('Failed to load audio file. Please try again.');
-            }
+    elements.audioInput.addEventListener('change', (event: Event) => {
+        const target = event.target as HTMLInputElement | null;
+        const file = target?.files?.[0];
+        if (!file) {
+            return;
+        }
+
+        try {
+            const blobUrl = URL.createObjectURL(file);
+            setAudioBlobUrl(blobUrl);
+            elements.audioEl.src = blobUrl;
+            elements.audioEl.load();
+            log(`Audio loaded: ${file.name}`, 'success');
+        } catch (error) {
+            log(`Failed to load audio: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            alert('Failed to load audio file. Please try again.');
         }
     });
 
@@ -33,27 +37,30 @@ export function setupAudioHandlers(elements: UIElements) {
         }
     });
 
-    elements.audioEl.addEventListener('error', (e) => {
+    elements.audioEl.addEventListener('error', () => {
         log('Audio load error', 'error');
         alert('Failed to load audio. Please check the file format.');
     });
 }
 
 export function setupSettingsHandlers(elements: UIElements) {
-    elements.styleInput.addEventListener('change', async (e) => {
-        const file = (e.target as HTMLInputElement).files?.[0];
-        if (file) {
-            try {
-                projectState.styleImageMime = file.type;
-                projectState.styleImageBase64 = await blobToBase64(file);
-                elements.stylePreview.src = URL.createObjectURL(file);
-                elements.stylePreview.classList.remove('hidden');
-                saveState();
-                log("Style reference image updated.", "info");
-            } catch (error) {
-                log(`Failed to load style image: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
-                alert('Failed to load style image. Please try again.');
-            }
+    elements.styleInput.addEventListener('change', async (event: Event) => {
+        const target = event.target as HTMLInputElement | null;
+        const file = target?.files?.[0];
+        if (!file) {
+            return;
+        }
+
+        try {
+            projectState.styleImageMime = file.type;
+            projectState.styleImageBase64 = await blobToBase64(file);
+            elements.stylePreview.src = URL.createObjectURL(file);
+            elements.stylePreview.classList.remove('hidden');
+            saveState();
+            log("Style reference image updated.", "info");
+        } catch (error) {
+            log(`Failed to load style image: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
+            alert('Failed to load style image. Please try again.');
         }
     });
 
@@ -71,7 +78,7 @@ export function setupSettingsHandlers(elements: UIElements) {
     });
 
     elements.transitionSelect.addEventListener('change', () => {
-        projectState.transitionType = elements.transitionSelect.value as any;
+        projectState.transitionType = elements.transitionSelect.value as ProjectState['transitionType'];
         log(`Transition effect changed to: ${projectState.transitionType.toUpperCase()}`, 'info');
         saveState();
     });
