@@ -367,7 +367,13 @@
                 <div class="w-2 h-2 rounded-full bg-neon-green animate-pulse"></div>
                 <span class="text-[10px] uppercase font-mono font-semibold text-gray-500 tracking-wider">Console</span>
               </div>
-              <button id="clear-console" class="text-[10px] text-gray-600 hover:text-gray-400 transition-colors">Clear</button>
+              <div class="flex items-center gap-3 text-[10px] font-mono text-gray-500">
+                <label class="flex items-center gap-1 cursor-pointer select-none">
+                  <input id="debug-toggle" type="checkbox" class="form-checkbox h-3 w-3 rounded border-gray-600 bg-gray-800" />
+                  <span>Verbose</span>
+                </label>
+                <button id="clear-console" class="text-gray-600 hover:text-gray-400 transition-colors">Clear</button>
+              </div>
             </div>
             <div id="debug-output" class="flex-1 p-3 font-mono text-[10px] overflow-y-auto custom-scrollbar space-y-1 bg-cyber-950/50">
               <div class="text-gray-500">System initialized. Waiting for input...</div>
