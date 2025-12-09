@@ -148,6 +148,16 @@
               <span id="audio-duration" class="text-xs font-mono text-neon-blue">00:00</span>
             </div>
             <audio id="audio-element" class="hidden"></audio>
+
+            <div class="mt-4 space-y-2">
+              <button id="vocal-removal-btn" class="w-full py-2.5 text-sm font-semibold rounded-xl bg-gradient-to-r from-neon-blue/80 via-neon-purple/80 to-neon-pink/80 text-white shadow-lg shadow-neon-purple/20 hover:from-neon-blue hover:via-neon-purple hover:to-neon-pink transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                Mute explicit lyrics (keep the music)
+              </button>
+              <div class="flex items-center justify-between text-[10px] text-gray-500">
+                <span id="vocal-removal-status">Creates an instrumental by reducing vocals. Works best on stereo tracks.</span>
+                <a id="instrumental-download" class="text-neon-blue hover:text-neon-purple underline hidden" download="instrumental.wav">Download</a>
+              </div>
+            </div>
           </div>
 
           <!-- Production Settings Card -->
