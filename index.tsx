@@ -542,17 +542,24 @@ Return ONLY the rewritten prompt text, nothing else.`,
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     const sceneIndex = projectState.scenes.findIndex(s => s.id === sceneId);
-    if (sceneIndex === -1) return;
+    if (sceneIndex === -1) {
+        log(`ERROR: Scene ${sceneId} not found in project state.`, "error");
+        return;
+    }
 
     // Update State
     projectState.scenes[sceneIndex].status = 'generating';
     projectState.scenes[sceneIndex].errorMsg = undefined;
     renderSceneList();
-    log(`Starting render for Scene #${sceneIndex + 1}...`, "info");
+
+    log(`========== RENDER START: Scene #${sceneIndex + 1} ==========`, "system");
+    log(`Scene ID: ${sceneId}`, "info");
 
     let currentPrompt = projectState.scenes[sceneIndex].visualPrompt;
+    log(`Original Prompt: "${currentPrompt.substring(0, 100)}..."`, "info");
+
     let attempts = 0;
-    const maxAttempts = 3; // 1. Original/Sanitized -> 2. Image-First -> 3. Hard Sanitize
+    const maxAttempts = 3;
 
     // Check if we have a global style image
     let styleImage = projectState.styleImageBase64 ? {
@@ -560,8 +567,12 @@ Return ONLY the rewritten prompt text, nothing else.`,
         mimeType: projectState.styleImageMime
     } : undefined;
 
+    log(`Style Image Present: ${styleImage ? 'YES (' + projectState.styleImageMime + ')' : 'NO'}`, "info");
+    log(`Aspect Ratio: ${projectState.aspectRatio}`, "info");
+
     while (attempts < maxAttempts) {
         attempts++;
+        log(`--- Attempt ${attempts}/${maxAttempts} ---`, "system");
 
         try {
             const videoConfig: any = {
@@ -570,11 +581,14 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 aspectRatio: projectState.aspectRatio
             };
 
+            log(`Video Config: ${JSON.stringify(videoConfig)}`, "info");
+            log(`Sending prompt to Veo: "${currentPrompt.substring(0, 80)}..."`, "info");
+
             let veoOperation;
 
             // LOGIC: Use style image if available (Global or Generated Safe Reference)
             if (styleImage) {
-                log(`Using reference image for generation...`, 'info');
+                log(`Using reference image for generation (${styleImage.mimeType})...`, 'info');
                 veoOperation = await ai.models.generateVideos({
                     model: 'veo-3.1-generate-preview',
                     prompt: currentPrompt,
@@ -582,6 +596,7 @@ Return ONLY the rewritten prompt text, nothing else.`,
                     config: videoConfig
                 });
             } else {
+                log(`No reference image - text-only generation...`, 'info');
                 veoOperation = await ai.models.generateVideos({
                     model: 'veo-3.1-generate-preview',
                     prompt: currentPrompt,
@@ -589,24 +604,42 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 });
             }
 
-            log(`Veo job started. Polling... (Attempt ${attempts})`, "info");
+            log(`Veo API call successful. Operation created.`, "success");
+            log(`Operation Name: ${veoOperation.name || 'N/A'}`, "info");
+            log(`Polling for completion...`, "info");
 
-            // Poll
+            // Poll with progress updates
+            let pollCount = 0;
             while (!veoOperation.done) {
+                pollCount++;
                 await new Promise(r => setTimeout(r, 4000));
                 veoOperation = await ai.operations.getVideosOperation({ operation: veoOperation });
+                log(`Poll #${pollCount}: done=${veoOperation.done}`, "info");
+            }
+
+            log(`Polling complete after ${pollCount} polls.`, "success");
+
+            // Debug: Log the full response structure
+            log(`Response exists: ${!!veoOperation.response}`, "info");
+            if (veoOperation.response) {
+                log(`GeneratedVideos count: ${veoOperation.response.generatedVideos?.length || 0}`, "info");
             }
 
             // Check Result
             if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
                 const uri = veoOperation.response.generatedVideos[0].video.uri;
-                log("Video generated successfully. Downloading...", "success");
+                log(`Video URI received: ${uri.substring(0, 50)}...`, "success");
+                log("Downloading video...", "info");
 
                 const res = await fetch(`${uri}&key=${process.env.API_KEY}`);
+                log(`Download response: ${res.status} ${res.statusText}`, "info");
+
                 if (!res.ok) {
                     throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
                 }
                 const blob = await res.blob();
+                log(`Downloaded blob size: ${blob.size} bytes`, "info");
+
                 if (blob.size === 0) {
                     throw new Error("Downloaded video is empty");
                 }
@@ -619,34 +652,39 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
                 saveState();
                 renderSceneList();
+                log(`========== RENDER SUCCESS: Scene #${sceneIndex + 1} ==========`, "success");
                 return; // Success, exit function
             } else {
+                // Log what we got instead
+                log(`ERROR: No video URI in response.`, "error");
+                log(`Response object: ${JSON.stringify(veoOperation.response || {}).substring(0, 200)}`, "warn");
                 throw new Error("Veo returned no video (Possible Safety Block)");
             }
 
         } catch (e: any) {
-            console.error(e);
+            console.error("Veo Error:", e);
+            log(`CATCH: ${e.message}`, "error");
+            log(`Error name: ${e.name || 'N/A'}`, "error");
 
             if (attempts < maxAttempts && (e.message.includes("Safety") || e.message.includes("no video"))) {
                 const category = detectSafetyCategory(e.message);
-                log(`Veo blocked request (${category}): ${e.message}`, "warn");
+                log(`Safety Block Detected (${category}): ${e.message}`, "warn");
 
                 projectState.scenes[sceneIndex].status = 'sanitizing';
                 renderSceneList();
 
                 // STRATEGY SWITCHING
                 if (attempts === 1) {
-                    // Strategy 1: Smart Sanitize + Generate Safe Image
+                    log(`=== STRATEGY 1: Drop Image + Generate Safe Reference ===`, "system");
 
                     // If we used a style image (whether User or Generated) and it failed, DROP IT.
-                    // It might be the trigger.
                     if (styleImage) {
-                        log("Strategy: Dropping previous style image (potential safety trigger).", "warn");
+                        log("Dropping previous style image (potential safety trigger).", "warn");
                         styleImage = undefined;
                     }
 
                     // Now try to generate a NEW safe reference image to guide Veo
-                    log("Strategy: Generating Safe Reference Image to bypass filters...", "system");
+                    log("Generating Safe Reference Image via Imagen...", "system");
                     const safeImage = await generateSafeReferenceImage(currentPrompt);
 
                     if (safeImage) {
@@ -654,17 +692,19 @@ Return ONLY the rewritten prompt text, nothing else.`,
                             imageBytes: safeImage.base64,
                             mimeType: safeImage.mime
                         };
-                        log("Safe reference image created. Retrying with image...", "success");
+                        log("Safe reference image created successfully.", "success");
                     } else {
                         // Fallback to just text sanitization if image gen fails
-                        log("Image gen failed. Retrying with sanitized text only.", "warn");
+                        log("Image generation failed. Falling back to text sanitization...", "warn");
                         const newPrompt = await sanitizePrompt(currentPrompt);
+                        log(`Sanitized Prompt: "${newPrompt.substring(0, 80)}..."`, "info");
                         currentPrompt = newPrompt;
                     }
                 } else {
                     // Strategy 2: Hard Sanitize (Last Resort)
-                    log("Strategy: Aggressive Sanitization...", "system");
+                    log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system");
                     currentPrompt = "Abstract cinematic music video scene, atmospheric lighting, moody, high quality, 4k";
+                    log(`Hard-coded fallback prompt applied.`, "warn");
                 }
 
                 projectState.scenes[sceneIndex].status = 'generating';
@@ -674,11 +714,18 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 projectState.scenes[sceneIndex].status = 'error';
                 projectState.scenes[sceneIndex].errorMsg = e.message || "Unknown error";
                 renderSceneList();
-                log(`Render failed: ${e.message}`, "error");
+                log(`========== RENDER FAILED: Scene #${sceneIndex + 1} ==========`, "error");
+                log(`Final Error: ${e.message}`, "error");
                 return;
             }
         }
     }
+
+    // If we exit the loop without returning, all attempts failed
+    log(`All ${maxAttempts} attempts exhausted. Scene render failed.`, "error");
+    projectState.scenes[sceneIndex].status = 'error';
+    projectState.scenes[sceneIndex].errorMsg = "Max retry attempts reached";
+    renderSceneList();
 };
 
 renderAllBtn.addEventListener('click', async () => {
