@@ -13,12 +13,22 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'process.env.USE_PROXY': JSON.stringify(env.USE_PROXY || 'false')
       },
       resolve: {
         alias: {
-          '@': path.resolve(__dirname, '.'),
+          '@': path.resolve(__dirname, 'src'),
         }
+      },
+      build: {
+        outDir: 'dist',
+        sourcemap: false,
+        rollupOptions: {
+          input: {
+            main: path.resolve(__dirname, 'index.html'),
+          },
+        },
       }
     };
 });
