@@ -91,6 +91,7 @@ const renderAllBtn = document.getElementById('render-all-btn') as HTMLButtonElem
 const videoLayer1 = document.getElementById('video-layer-1') as HTMLVideoElement;
 const videoLayer2 = document.getElementById('video-layer-2') as HTMLVideoElement;
 let activeVideoLayer = 1; // 1 or 2
+let lastActiveSceneId: string | null = null;
 
 const playPauseBtn = document.getElementById('play-pause-master') as HTMLButtonElement;
 const iconPlay = document.getElementById('icon-play') as HTMLElement;
@@ -106,7 +107,42 @@ const clearConsoleBtn = document.getElementById('clear-console') as HTMLButtonEl
 
 // --- Logging System ---
 
-function log(message: string, type: 'info' | 'success' | 'warn' | 'error' | 'system' = 'info') {
+type LogType = 'info' | 'success' | 'warn' | 'error' | 'system';
+
+const debugState = {
+    verbose: false
+};
+
+const debugToggle = document.getElementById('debug-toggle') as HTMLInputElement;
+
+function hydrateDebugPreference() {
+    const params = new URLSearchParams(window.location.search);
+    const queryDebug = params.get('debug');
+    const saved = localStorage.getItem('debug-verbose');
+
+    if (queryDebug && ['1', 'true', 'verbose'].includes(queryDebug.toLowerCase())) {
+        debugState.verbose = true;
+    } else if (saved) {
+        debugState.verbose = saved === 'true';
+    }
+
+    if (debugToggle) {
+        debugToggle.checked = debugState.verbose;
+    }
+}
+
+function persistDebugPreference(enabled: boolean) {
+    localStorage.setItem('debug-verbose', String(enabled));
+}
+
+interface LogOptions {
+    context?: Record<string, unknown>;
+    verbose?: boolean;
+}
+
+function log(message: string, type: LogType = 'info', options: LogOptions = {}) {
+    if (options.verbose && !debugState.verbose) return;
+
     const entry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString().split(' ')[0];
 
@@ -116,11 +152,31 @@ function log(message: string, type: 'info' | 'success' | 'warn' | 'error' | 'sys
     if (type === 'error') colorClass = 'text-red-400';
     if (type === 'system') colorClass = 'text-blue-400 font-bold';
 
-    entry.innerHTML = `<span class="text-gray-600 mr-2">[${timestamp}]</span><span class="${colorClass}">${message}</span>`;
+    let body = `<span class="text-gray-600 mr-2">[${timestamp}]</span><span class="${colorClass}">${message}</span>`;
+
+    if (options.context) {
+        const formattedContext = JSON.stringify(options.context, null, 2)
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        body += `<pre class="mt-1 text-[9px] text-gray-500 whitespace-pre-wrap bg-black/30 border border-gray-800 rounded p-2">${formattedContext}</pre>`;
+    }
+
+    entry.innerHTML = body;
     entry.className = "border-b border-gray-800/50 pb-0.5 mb-0.5 break-words";
 
     debugOutput.appendChild(entry);
     debugOutput.scrollTop = debugOutput.scrollHeight;
+}
+
+hydrateDebugPreference();
+
+if (debugToggle) {
+    debugToggle.addEventListener('change', (e) => {
+        const enabled = (e.target as HTMLInputElement).checked;
+        debugState.verbose = enabled;
+        persistDebugPreference(enabled);
+        log(`Verbose logging ${enabled ? 'enabled' : 'disabled'}.`, 'system');
+    });
 }
 
 clearConsoleBtn.addEventListener('click', () => {
@@ -327,7 +383,19 @@ planButton.addEventListener('click', async () => {
 
     planButton.disabled = true;
     planButton.innerHTML = `<span class="animate-pulse">Director Planning...</span>`;
-    log(`Starting storyboard generation with ${describePlannerModel(projectState.plannerModel)}...`, "system");
+    const planningStart = performance.now();
+    log("Starting storyboard generation with Gemini 3.0...", "system", {
+        context: {
+            model: 'gemini-3-pro-preview',
+            payload: {
+                audioDuration: projectState.audioDuration,
+                clipLength: projectState.clipLength,
+                aspectRatio: projectState.aspectRatio,
+                lyricChars: projectState.lyrics.length
+            }
+        },
+        verbose: true
+    });
 
     const numClips = Math.ceil(projectState.audioDuration / projectState.clipLength);
 
@@ -427,7 +495,10 @@ planButton.addEventListener('click', async () => {
 
         saveState();
         renderSceneList();
-        log(`Storyboard created with ${projectState.scenes.length} scenes.`, "success");
+        const planningMs = Math.round(performance.now() - planningStart);
+        log(`Storyboard created with ${projectState.scenes.length} scenes.`, "success", {
+            context: { durationMs: planningMs }
+        });
 
         // Auto-navigate to Timeline tab
         const timelineTab = document.querySelector('[data-tab="timeline"]') as HTMLButtonElement;
@@ -438,7 +509,9 @@ planButton.addEventListener('click', async () => {
 
     } catch (e) {
         console.error(e);
-        log("Planning failed. Check console.", "error");
+        log("Planning failed. Check console.", "error", {
+            context: { durationMs: Math.round(performance.now() - planningStart) }
+        });
         alert("Planning failed.");
     } finally {
         planButton.disabled = false;
@@ -575,7 +648,14 @@ async function generateSafeReferenceImage(prompt: string): Promise<{ base64: str
 
 async function sanitizePrompt(originalPrompt: string): Promise<string> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    log("Running Smart Safety Sanitizer on prompt...", "warn");
+    const sanitizeStart = performance.now();
+    log("Running Smart Safety Sanitizer on prompt...", "warn", {
+        context: {
+            model: 'gemini-3-pro-preview',
+            originalLength: originalPrompt.length
+        },
+        verbose: true
+    });
 
     const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
@@ -598,12 +678,22 @@ RULES:
 Return ONLY the rewritten prompt text, nothing else.`,
         }
     });
-    return response.text;
+    const rewritten = response.text;
+    log("Sanitizer returned safe prompt.", 'success', {
+        context: {
+            durationMs: Math.round(performance.now() - sanitizeStart),
+            rewrittenLength: rewritten.length
+        },
+        verbose: true
+    });
+    return rewritten;
 }
 
 (window as any).renderSingleScene = async (sceneId: string) => {
     await checkApiKey();
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+    const renderStart = performance.now();
 
     const sceneIndex = projectState.scenes.findIndex(s => s.id === sceneId);
     if (sceneIndex === -1) {
@@ -636,7 +726,15 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
     while (attempts < maxAttempts) {
         attempts++;
-        log(`--- Attempt ${attempts}/${maxAttempts} ---`, "system");
+        const attemptStart = performance.now();
+        log(`--- Attempt ${attempts}/${maxAttempts} ---`, "system", {
+            context: {
+                attempt: attempts,
+                maxAttempts,
+                promptLength: currentPrompt.length
+            },
+            verbose: true
+        });
 
         try {
             const videoConfig: any = {
@@ -645,8 +743,21 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 aspectRatio: projectState.aspectRatio
             };
 
-            log(`Video Config: ${JSON.stringify(videoConfig)}`, "info");
-            log(`Sending prompt to Veo: "${currentPrompt.substring(0, 80)}..."`, "info");
+            log(`Video Config prepared`, "info", {
+                context: {
+                    model: 'veo-3.1-generate-preview',
+                    config: videoConfig,
+                    attempt: attempts,
+                    styleImageAttached: Boolean(styleImage)
+                },
+                verbose: true
+            });
+            log(`Sending prompt to Veo`, "info", {
+                context: {
+                    promptPreview: `${currentPrompt.substring(0, 120)}${currentPrompt.length > 120 ? '...' : ''}`
+                },
+                verbose: true
+            });
 
             let veoOperation;
 
@@ -716,7 +827,13 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
                 saveState();
                 renderSceneList();
-                log(`========== RENDER SUCCESS: Scene #${sceneIndex + 1} ==========`, "success");
+                log(`========== RENDER SUCCESS: Scene #${sceneIndex + 1} ==========`, "success", {
+                    context: {
+                        durationMs: Math.round(performance.now() - attemptStart),
+                        totalElapsedMs: Math.round(performance.now() - renderStart),
+                        attempt: attempts
+                    }
+                });
                 return; // Success, exit function
             } else {
                 // Log what we got instead
@@ -727,12 +844,23 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
         } catch (e: any) {
             console.error("Veo Error:", e);
-            log(`CATCH: ${e.message}`, "error");
-            log(`Error name: ${e.name || 'N/A'}`, "error");
+            log(`CATCH: ${e.message}`, "error", {
+                context: {
+                    attempt: attempts,
+                    durationMs: Math.round(performance.now() - attemptStart)
+                },
+                verbose: true
+            });
+            log(`Error name: ${e.name || 'N/A'}`, "error", { verbose: true });
 
             if (attempts < maxAttempts && (e.message.includes("Safety") || e.message.includes("no video"))) {
                 const category = detectSafetyCategory(e.message);
-                log(`Safety Block Detected (${category}): ${e.message}`, "warn");
+                log(`Safety Block Detected (${category}): ${e.message}`, "warn", {
+                    context: {
+                        attempt: attempts,
+                        strategy: attempts === 1 ? 'reference-regeneration' : 'hard-fallback'
+                    }
+                });
 
                 projectState.scenes[sceneIndex].status = 'sanitizing';
                 renderSceneList();
@@ -759,14 +887,20 @@ Return ONLY the rewritten prompt text, nothing else.`,
                         log("Safe reference image created successfully.", "success");
                     } else {
                         // Fallback to just text sanitization if image gen fails
-                        log("Image generation failed. Falling back to text sanitization...", "warn");
+                        log("Image generation failed. Falling back to text sanitization...", "warn", { verbose: true });
                         const newPrompt = await sanitizePrompt(currentPrompt);
-                        log(`Sanitized Prompt: "${newPrompt.substring(0, 80)}..."`, "info");
+                        log(`Sanitized Prompt updated.`, "info", {
+                            context: {
+                                attempt: attempts,
+                                newLength: newPrompt.length
+                            },
+                            verbose: true
+                        });
                         currentPrompt = newPrompt;
                     }
                 } else {
                     // Strategy 2: Hard Sanitize (Last Resort)
-                    log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system");
+                    log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system", { verbose: true });
                     currentPrompt = "Abstract cinematic music video scene, atmospheric lighting, moody, high quality, 4k";
                     log(`Hard-coded fallback prompt applied.`, "warn");
                 }
@@ -786,7 +920,9 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 
     // If we exit the loop without returning, all attempts failed
-    log(`All ${maxAttempts} attempts exhausted. Scene render failed.`, "error");
+    log(`All ${maxAttempts} attempts exhausted. Scene render failed.`, "error", {
+        context: { totalElapsedMs: Math.round(performance.now() - renderStart) }
+    });
     projectState.scenes[sceneIndex].status = 'error';
     projectState.scenes[sceneIndex].errorMsg = "Max retry attempts reached";
     renderSceneList();
@@ -817,13 +953,19 @@ playPauseBtn.addEventListener('click', () => {
         iconPlay.classList.add('hidden');
         iconPause.classList.remove('hidden');
         startPlaybackEngine();
-        log("Playback started.", "info");
+        log("Playback started.", "info", {
+            context: { atTime: audioEl.currentTime },
+            verbose: true
+        });
     } else {
         audioEl.pause();
         iconPlay.classList.remove('hidden');
         iconPause.classList.add('hidden');
         stopPlaybackEngine();
-        log("Playback paused.", "info");
+        log("Playback paused.", "info", {
+            context: { atTime: audioEl.currentTime },
+            verbose: true
+        });
     }
 });
 
@@ -842,6 +984,19 @@ function startPlaybackEngine() {
 
         if (activeScene) {
             nowPlayingText.textContent = `Scene ${activeSceneIndex + 1}: ${activeScene.description}`;
+
+            if (lastActiveSceneId !== activeScene.id) {
+                log('Scene transition detected.', 'system', {
+                    context: {
+                        from: lastActiveSceneId || 'none',
+                        to: activeScene.id,
+                        playbackTime: t,
+                        layer: activeVideoLayer
+                    },
+                    verbose: true
+                });
+                lastActiveSceneId = activeScene.id;
+            }
 
             // Check if we need to switch video
             // We check the dataset 'sceneId' on the ACTIVE video layer
@@ -867,6 +1022,7 @@ function startPlaybackEngine() {
 }
 
 function performTransition(newUrl: string, newSceneId: string) {
+    const transitionStart = performance.now();
     const incomingLayer = activeVideoLayer === 1 ? videoLayer2 : videoLayer1;
     const outgoingLayer = activeVideoLayer === 1 ? videoLayer1 : videoLayer2;
 
@@ -912,7 +1068,14 @@ function performTransition(newUrl: string, newSceneId: string) {
 
     // 3. Swap Active Index
     activeVideoLayer = activeVideoLayer === 1 ? 2 : 1;
-    log(`Switched to scene ${newSceneId} (${effect})`, 'system');
+    log(`Switched to scene ${newSceneId} (${effect})`, 'system', {
+        context: {
+            effect,
+            incomingLayer: activeVideoLayer,
+            durationMs: Math.round(performance.now() - transitionStart)
+        },
+        verbose: true
+    });
 }
 
 function stopPlaybackEngine() {
