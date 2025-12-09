@@ -20,6 +20,13 @@ interface Scene {
     errorMsg?: string;
 }
 
+const PLANNER_MODELS = {
+    default: 'gemini-3-pro-preview',
+    fast: 'gemini-2.0-nano-banana'
+} as const;
+
+type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
+
 interface ProjectState {
     scenes: Scene[];
     lyrics: string;
@@ -29,6 +36,7 @@ interface ProjectState {
     styleImageMime: string;
     audioDuration: number;
     transitionType: 'cut' | 'crossfade' | 'fadeblack';
+    plannerModel: PlannerModelId;
 }
 
 // --- Globals ---
@@ -52,10 +60,13 @@ let projectState: ProjectState = {
     styleImageBase64: '',
     styleImageMime: '',
     audioDuration: 0,
-    transitionType: 'cut'
+    transitionType: 'cut',
+    plannerModel: PLANNER_MODELS.default
 };
 
 let audioBlobUrl: string | null = null;
+let instrumentalBlobUrl: string | null = null;
+let uploadedAudioFile: File | null = null;
 let masterPlaybackInterval: number | null = null;
 
 // --- DOM Elements ---
@@ -63,6 +74,9 @@ let masterPlaybackInterval: number | null = null;
 const audioInput = document.getElementById('audio-input') as HTMLInputElement;
 const audioEl = document.getElementById('audio-element') as HTMLAudioElement;
 const audioDurationEl = document.getElementById('audio-duration') as HTMLElement;
+const vocalRemovalBtn = document.getElementById('vocal-removal-btn') as HTMLButtonElement;
+const vocalRemovalStatus = document.getElementById('vocal-removal-status') as HTMLElement;
+const instrumentalDownloadLink = document.getElementById('instrumental-download') as HTMLAnchorElement;
 
 const promptInput = document.getElementById('prompt-input') as HTMLTextAreaElement;
 const planButton = document.getElementById('plan-button') as HTMLButtonElement;
@@ -71,6 +85,7 @@ const clearProjectBtn = document.getElementById('clear-project') as HTMLButtonEl
 const aspectRatioSelect = document.getElementById('aspect-ratio') as HTMLSelectElement;
 const clipLengthSelect = document.getElementById('clip-length') as HTMLSelectElement;
 const transitionSelect = document.getElementById('transition-select') as HTMLSelectElement;
+const plannerModelSelect = document.getElementById('planner-model') as HTMLSelectElement;
 const styleInput = document.getElementById('style-image') as HTMLInputElement;
 const stylePreview = document.getElementById('style-preview') as HTMLImageElement;
 
@@ -81,8 +96,7 @@ const renderAllBtn = document.getElementById('render-all-btn') as HTMLButtonElem
 const videoLayer1 = document.getElementById('video-layer-1') as HTMLVideoElement;
 const videoLayer2 = document.getElementById('video-layer-2') as HTMLVideoElement;
 let activeVideoLayer = 1; // 1 or 2
-let currentHighlightedSceneId: string | null = null;
-let lastNowPlayingMessage = '';
+let lastActiveSceneId: string | null = null;
 
 const playPauseBtn = document.getElementById('play-pause-master') as HTMLButtonElement;
 const iconPlay = document.getElementById('icon-play') as HTMLElement;
@@ -102,7 +116,42 @@ videoLayer2.setAttribute('data-scene-id', 'blank');
 
 // --- Logging System ---
 
-function log(message: string, type: 'info' | 'success' | 'warn' | 'error' | 'system' = 'info') {
+type LogType = 'info' | 'success' | 'warn' | 'error' | 'system';
+
+const debugState = {
+    verbose: false
+};
+
+const debugToggle = document.getElementById('debug-toggle') as HTMLInputElement;
+
+function hydrateDebugPreference() {
+    const params = new URLSearchParams(window.location.search);
+    const queryDebug = params.get('debug');
+    const saved = localStorage.getItem('debug-verbose');
+
+    if (queryDebug && ['1', 'true', 'verbose'].includes(queryDebug.toLowerCase())) {
+        debugState.verbose = true;
+    } else if (saved) {
+        debugState.verbose = saved === 'true';
+    }
+
+    if (debugToggle) {
+        debugToggle.checked = debugState.verbose;
+    }
+}
+
+function persistDebugPreference(enabled: boolean) {
+    localStorage.setItem('debug-verbose', String(enabled));
+}
+
+interface LogOptions {
+    context?: Record<string, unknown>;
+    verbose?: boolean;
+}
+
+function log(message: string, type: LogType = 'info', options: LogOptions = {}) {
+    if (options.verbose && !debugState.verbose) return;
+
     const entry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString().split(' ')[0];
 
@@ -112,11 +161,31 @@ function log(message: string, type: 'info' | 'success' | 'warn' | 'error' | 'sys
     if (type === 'error') colorClass = 'text-red-400';
     if (type === 'system') colorClass = 'text-blue-400 font-bold';
 
-    entry.innerHTML = `<span class="text-gray-600 mr-2">[${timestamp}]</span><span class="${colorClass}">${message}</span>`;
+    let body = `<span class="text-gray-600 mr-2">[${timestamp}]</span><span class="${colorClass}">${message}</span>`;
+
+    if (options.context) {
+        const formattedContext = JSON.stringify(options.context, null, 2)
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+        body += `<pre class="mt-1 text-[9px] text-gray-500 whitespace-pre-wrap bg-black/30 border border-gray-800 rounded p-2">${formattedContext}</pre>`;
+    }
+
+    entry.innerHTML = body;
     entry.className = "border-b border-gray-800/50 pb-0.5 mb-0.5 break-words";
 
     debugOutput.appendChild(entry);
     debugOutput.scrollTop = debugOutput.scrollHeight;
+}
+
+hydrateDebugPreference();
+
+if (debugToggle) {
+    debugToggle.addEventListener('change', (e) => {
+        const enabled = (e.target as HTMLInputElement).checked;
+        debugState.verbose = enabled;
+        persistDebugPreference(enabled);
+        log(`Verbose logging ${enabled ? 'enabled' : 'disabled'}.`, 'system');
+    });
 }
 
 clearConsoleBtn.addEventListener('click', () => {
@@ -167,6 +236,93 @@ setNowPlaying('Upload audio to start', 'warn');
 
 // --- Helper Functions ---
 
+const AudioContextClass = (window.AudioContext || (window as any).webkitAudioContext);
+const sharedAudioContext = AudioContextClass ? new AudioContextClass() : null;
+
+function updateVocalRemovalStatus(message: string, tone: 'neutral' | 'success' | 'warn' | 'error' = 'neutral') {
+    if (!vocalRemovalStatus) return;
+
+    const toneClass = tone === 'success' ? 'text-neon-green' : tone === 'warn' ? 'text-yellow-400' : tone === 'error' ? 'text-red-400' : 'text-gray-500';
+    vocalRemovalStatus.className = toneClass + ' text-[10px]';
+    vocalRemovalStatus.textContent = message;
+}
+
+async function decodeFileToAudioBuffer(file: File): Promise<AudioBuffer> {
+    if (!sharedAudioContext) {
+        throw new Error('Web Audio API is not supported in this browser.');
+    }
+
+    if (sharedAudioContext.state === 'suspended') {
+        await sharedAudioContext.resume();
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    return await sharedAudioContext.decodeAudioData(arrayBuffer.slice(0));
+}
+
+function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const samples = buffer.length;
+    const blockAlign = numChannels * (bitDepth / 8);
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = samples * blockAlign;
+    const bufferLength = 44 + dataSize;
+
+    const arrayBuffer = new ArrayBuffer(bufferLength);
+    const view = new DataView(arrayBuffer);
+
+    function writeString(offset: number, str: string) {
+        for (let i = 0; i < str.length; i++) {
+            view.setUint8(offset + i, str.charCodeAt(i));
+        }
+    }
+
+    function writeUint16(offset: number, value: number) {
+        view.setUint16(offset, value, true);
+    }
+
+    function writeUint32(offset: number, value: number) {
+        view.setUint32(offset, value, true);
+    }
+
+    writeString(0, 'RIFF');
+    writeUint32(4, 36 + dataSize);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    writeUint32(16, 16); // Subchunk1Size for PCM
+    writeUint16(20, format);
+    writeUint16(22, numChannels);
+    writeUint32(24, sampleRate);
+    writeUint32(28, byteRate);
+    writeUint16(32, blockAlign);
+    writeUint16(34, bitDepth);
+    writeString(36, 'data');
+    writeUint32(40, dataSize);
+
+    // Interleave channels
+    const channelData: Float32Array[] = [];
+    for (let channel = 0; channel < numChannels; channel++) {
+        channelData.push(buffer.getChannelData(channel));
+    }
+
+    let offset = 44;
+    for (let i = 0; i < samples; i++) {
+        for (let channel = 0; channel < numChannels; channel++) {
+            let sample = channelData[channel][i];
+            sample = Math.max(-1, Math.min(1, sample));
+            const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+            view.setInt16(offset, intSample, true);
+            offset += 2;
+        }
+    }
+
+    return arrayBuffer;
+}
+
 async function blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -187,6 +343,19 @@ function formatTime(seconds: number): string {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+function validatePlannerModel(modelId: string): PlannerModelId {
+    const allowedModels = Object.values(PLANNER_MODELS) as string[];
+    if (allowedModels.includes(modelId)) {
+        return modelId as PlannerModelId;
+    }
+    return PLANNER_MODELS.default;
+}
+
+function describePlannerModel(modelId: PlannerModelId): string {
+    if (modelId === PLANNER_MODELS.fast) return 'Gemini Nano Banana (Fast)';
+    return 'Gemini 3 Pro Preview (Default)';
 }
 
 async function checkApiKey() {
@@ -215,18 +384,14 @@ function loadState() {
             const parsed = JSON.parse(saved);
             projectState = { ...projectState, ...parsed };
 
-            // VALIDATION: Ensure aspectRatio is valid (Veo 3.1 only supports 16:9 and 9:16)
-            const validAspectRatios = ['16:9', '9:16'];
-            if (!validAspectRatios.includes(projectState.aspectRatio)) {
-                log(`Invalid aspect ratio "${projectState.aspectRatio}" found. Auto-correcting to 16:9.`, "warn");
-                projectState.aspectRatio = '16:9';
-            }
+            projectState.plannerModel = validatePlannerModel(projectState.plannerModel);
 
             // Restore UI
             promptInput.value = projectState.lyrics;
             aspectRatioSelect.value = projectState.aspectRatio;
             clipLengthSelect.value = projectState.clipLength.toString();
             transitionSelect.value = projectState.transitionType;
+            plannerModelSelect.value = projectState.plannerModel;
 
             if (projectState.styleImageBase64) {
                 stylePreview.src = `data:${projectState.styleImageMime};base64,${projectState.styleImageBase64}`;
@@ -240,6 +405,8 @@ function loadState() {
             log("Failed to load saved state.", "error");
         }
     }
+
+    plannerModelSelect.value = projectState.plannerModel;
 }
 
 function saveState() {
@@ -257,13 +424,21 @@ function saveState() {
 
 audioInput.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
-    if (file) {
-        setNowPlaying('Loading audio...', 'info');
-        audioBlobUrl = URL.createObjectURL(file);
-        audioEl.src = audioBlobUrl;
-        audioEl.load();
-        log(`Audio loaded: ${file.name}`, 'success');
+    if (!file) return;
+
+    uploadedAudioFile = file;
+
+    if (audioBlobUrl) {
+        URL.revokeObjectURL(audioBlobUrl);
     }
+
+    audioBlobUrl = URL.createObjectURL(file);
+    audioEl.src = audioBlobUrl;
+    audioEl.load();
+    instrumentalBlobUrl = null;
+    instrumentalDownloadLink.classList.add('hidden');
+    updateVocalRemovalStatus('Creates an instrumental by reducing vocals. Works best on stereo tracks.', 'neutral');
+    log(`Audio loaded: ${file.name}`, 'success');
 });
 
 audioEl.addEventListener('loadedmetadata', () => {
@@ -286,6 +461,80 @@ audioEl.addEventListener('error', () => {
     iconPause.classList.add('hidden');
     setNowPlaying('Audio failed to load', 'error');
 });
+
+async function createInstrumentalBuffer(buffer: AudioBuffer): Promise<AudioBuffer> {
+    if (buffer.numberOfChannels < 2) {
+        throw new Error('Instrumental generation works best with stereo audio.');
+    }
+
+    const left = buffer.getChannelData(0);
+    const right = buffer.getChannelData(1);
+
+    const instrumentalBuffer = new AudioBuffer({
+        length: buffer.length,
+        numberOfChannels: 2,
+        sampleRate: buffer.sampleRate
+    });
+
+    const outLeft = instrumentalBuffer.getChannelData(0);
+    const outRight = instrumentalBuffer.getChannelData(1);
+
+    for (let i = 0; i < buffer.length; i++) {
+        const centerRemoved = (left[i] - right[i]) * 0.5;
+        outLeft[i] = centerRemoved;
+        outRight[i] = -centerRemoved;
+    }
+
+    return instrumentalBuffer;
+}
+
+async function handleVocalRemoval() {
+    if (!uploadedAudioFile) {
+        alert('Upload an audio file first.');
+        return;
+    }
+
+    if (!vocalRemovalBtn) return;
+
+    try {
+        vocalRemovalBtn.disabled = true;
+        vocalRemovalBtn.textContent = 'Muting vocals...';
+        updateVocalRemovalStatus('Processing track to reduce vocals. This may take a moment...', 'neutral');
+        log('Starting vocal reduction...', 'info');
+
+        const decoded = await decodeFileToAudioBuffer(uploadedAudioFile);
+        const instrumental = await createInstrumentalBuffer(decoded);
+        const wavArrayBuffer = audioBufferToWav(instrumental);
+        const instrumentalBlob = new Blob([wavArrayBuffer], { type: 'audio/wav' });
+
+        if (instrumentalBlobUrl) {
+            URL.revokeObjectURL(instrumentalBlobUrl);
+        }
+
+        instrumentalBlobUrl = URL.createObjectURL(instrumentalBlob);
+        audioBlobUrl = instrumentalBlobUrl;
+        audioEl.src = instrumentalBlobUrl;
+        audioEl.load();
+
+        instrumentalDownloadLink.href = instrumentalBlobUrl;
+        instrumentalDownloadLink.classList.remove('hidden');
+        updateVocalRemovalStatus('Vocals reduced. Download or play the instrumental version.', 'success');
+        log('Vocal reduction complete. Instrumental ready.', 'success');
+    } catch (err) {
+        console.error(err);
+        updateVocalRemovalStatus(err instanceof Error ? err.message : 'Failed to process audio.', 'error');
+        log('Vocal reduction failed.', 'error', { err: String(err) });
+    } finally {
+        vocalRemovalBtn.disabled = false;
+        vocalRemovalBtn.textContent = 'Mute explicit lyrics (keep the music)';
+    }
+}
+
+if (vocalRemovalBtn) {
+    vocalRemovalBtn.addEventListener('click', () => {
+        handleVocalRemoval();
+    });
+}
 
 // --- Settings Handling ---
 
@@ -317,6 +566,17 @@ transitionSelect.addEventListener('change', () => {
     saveState();
 });
 
+plannerModelSelect.addEventListener('change', () => {
+    const validatedModel = validatePlannerModel(plannerModelSelect.value);
+    if (validatedModel !== plannerModelSelect.value) {
+        log('Invalid planner model selection detected. Reverting to default.', 'warn');
+    }
+    projectState.plannerModel = validatedModel;
+    plannerModelSelect.value = validatedModel;
+    log(`Planner model set to: ${describePlannerModel(validatedModel)}`, 'info');
+    saveState();
+});
+
 promptInput.addEventListener('input', () => {
     projectState.lyrics = promptInput.value;
     saveState();
@@ -345,11 +605,31 @@ planButton.addEventListener('click', async () => {
     }
 
     await checkApiKey();
+    const normalizedPlannerModel = validatePlannerModel(projectState.plannerModel);
+    if (normalizedPlannerModel !== projectState.plannerModel) {
+        log('Unknown planner model found in state. Resetting to default.', 'warn');
+        projectState.plannerModel = normalizedPlannerModel;
+        saveState();
+    }
+    plannerModelSelect.value = projectState.plannerModel;
+    log(`Planner model selected: ${describePlannerModel(projectState.plannerModel)} (${projectState.plannerModel})`, 'system');
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     planButton.disabled = true;
     planButton.innerHTML = `<span class="animate-pulse">Director Planning...</span>`;
-    log("Starting storyboard generation with Gemini 3.0...", "system");
+    const planningStart = performance.now();
+    log("Starting storyboard generation with Gemini 3.0...", "system", {
+        context: {
+            model: 'gemini-3-pro-preview',
+            payload: {
+                audioDuration: projectState.audioDuration,
+                clipLength: projectState.clipLength,
+                aspectRatio: projectState.aspectRatio,
+                lyricChars: projectState.lyrics.length
+            }
+        },
+        verbose: true
+    });
 
     const numClips = Math.ceil(projectState.audioDuration / projectState.clipLength);
 
@@ -391,8 +671,8 @@ planButton.addEventListener('click', async () => {
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
+        const generateStoryboard = async (modelId: PlannerModelId) => ai.models.generateContent({
+            model: modelId,
             contents: { parts: [{ text: "Plan the music video storyboard." }] },
             config: {
                 systemInstruction: systemInstruction,
@@ -419,6 +699,23 @@ planButton.addEventListener('click', async () => {
             }
         });
 
+        let response;
+        try {
+            response = await generateStoryboard(projectState.plannerModel);
+            log(`Planner response received from ${projectState.plannerModel}.`, 'success');
+        } catch (plannerError: any) {
+            if (projectState.plannerModel === PLANNER_MODELS.fast) {
+                log(`Fast planner unavailable (${plannerError?.message || 'error'}). Falling back to Gemini 3 Pro Preview.`, 'warn');
+                projectState.plannerModel = PLANNER_MODELS.default;
+                plannerModelSelect.value = projectState.plannerModel;
+                saveState();
+                response = await generateStoryboard(projectState.plannerModel);
+                log(`Planner response received from fallback model ${projectState.plannerModel}.`, 'success');
+            } else {
+                throw plannerError;
+            }
+        }
+
         const plan = JSON.parse(response.text);
 
         projectState.scenes = plan.scenes.map((s: any, index: number) => ({
@@ -432,7 +729,10 @@ planButton.addEventListener('click', async () => {
 
         saveState();
         renderSceneList();
-        log(`Storyboard created with ${projectState.scenes.length} scenes.`, "success");
+        const planningMs = Math.round(performance.now() - planningStart);
+        log(`Storyboard created with ${projectState.scenes.length} scenes.`, "success", {
+            context: { durationMs: planningMs }
+        });
 
         // Auto-navigate to Timeline tab
         const timelineTab = document.querySelector('[data-tab="timeline"]') as HTMLButtonElement;
@@ -443,7 +743,9 @@ planButton.addEventListener('click', async () => {
 
     } catch (e) {
         console.error(e);
-        log("Planning failed. Check console.", "error");
+        log("Planning failed. Check console.", "error", {
+            context: { durationMs: Math.round(performance.now() - planningStart) }
+        });
         alert("Planning failed.");
     } finally {
         planButton.disabled = false;
@@ -598,7 +900,14 @@ async function generateSafeReferenceImage(prompt: string): Promise<{ base64: str
 
 async function sanitizePrompt(originalPrompt: string): Promise<string> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    log("Running Smart Safety Sanitizer on prompt...", "warn");
+    const sanitizeStart = performance.now();
+    log("Running Smart Safety Sanitizer on prompt...", "warn", {
+        context: {
+            model: 'gemini-3-pro-preview',
+            originalLength: originalPrompt.length
+        },
+        verbose: true
+    });
 
     const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
@@ -621,12 +930,22 @@ RULES:
 Return ONLY the rewritten prompt text, nothing else.`,
         }
     });
-    return response.text;
+    const rewritten = response.text;
+    log("Sanitizer returned safe prompt.", 'success', {
+        context: {
+            durationMs: Math.round(performance.now() - sanitizeStart),
+            rewrittenLength: rewritten.length
+        },
+        verbose: true
+    });
+    return rewritten;
 }
 
 (window as any).renderSingleScene = async (sceneId: string) => {
     await checkApiKey();
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+    const renderStart = performance.now();
 
     const sceneIndex = projectState.scenes.findIndex(s => s.id === sceneId);
     if (sceneIndex === -1) {
@@ -659,7 +978,15 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
     while (attempts < maxAttempts) {
         attempts++;
-        log(`--- Attempt ${attempts}/${maxAttempts} ---`, "system");
+        const attemptStart = performance.now();
+        log(`--- Attempt ${attempts}/${maxAttempts} ---`, "system", {
+            context: {
+                attempt: attempts,
+                maxAttempts,
+                promptLength: currentPrompt.length
+            },
+            verbose: true
+        });
 
         try {
             const videoConfig: any = {
@@ -668,8 +995,21 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 aspectRatio: projectState.aspectRatio
             };
 
-            log(`Video Config: ${JSON.stringify(videoConfig)}`, "info");
-            log(`Sending prompt to Veo: "${currentPrompt.substring(0, 80)}..."`, "info");
+            log(`Video Config prepared`, "info", {
+                context: {
+                    model: 'veo-3.1-generate-preview',
+                    config: videoConfig,
+                    attempt: attempts,
+                    styleImageAttached: Boolean(styleImage)
+                },
+                verbose: true
+            });
+            log(`Sending prompt to Veo`, "info", {
+                context: {
+                    promptPreview: `${currentPrompt.substring(0, 120)}${currentPrompt.length > 120 ? '...' : ''}`
+                },
+                verbose: true
+            });
 
             let veoOperation;
 
@@ -741,7 +1081,13 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
                 saveState();
                 renderSceneList();
-                log(`========== RENDER SUCCESS: Scene #${sceneIndex + 1} ==========`, "success");
+                log(`========== RENDER SUCCESS: Scene #${sceneIndex + 1} ==========`, "success", {
+                    context: {
+                        durationMs: Math.round(performance.now() - attemptStart),
+                        totalElapsedMs: Math.round(performance.now() - renderStart),
+                        attempt: attempts
+                    }
+                });
                 return; // Success, exit function
             } else {
                 // Log what we got instead
@@ -752,12 +1098,23 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
         } catch (e: any) {
             console.error("Veo Error:", e);
-            log(`CATCH: ${e.message}`, "error");
-            log(`Error name: ${e.name || 'N/A'}`, "error");
+            log(`CATCH: ${e.message}`, "error", {
+                context: {
+                    attempt: attempts,
+                    durationMs: Math.round(performance.now() - attemptStart)
+                },
+                verbose: true
+            });
+            log(`Error name: ${e.name || 'N/A'}`, "error", { verbose: true });
 
             if (attempts < maxAttempts && (e.message.includes("Safety") || e.message.includes("no video"))) {
                 const category = detectSafetyCategory(e.message);
-                log(`Safety Block Detected (${category}): ${e.message}`, "warn");
+                log(`Safety Block Detected (${category}): ${e.message}`, "warn", {
+                    context: {
+                        attempt: attempts,
+                        strategy: attempts === 1 ? 'reference-regeneration' : 'hard-fallback'
+                    }
+                });
 
                 projectState.scenes[sceneIndex].status = 'sanitizing';
                 renderSceneList();
@@ -784,14 +1141,20 @@ Return ONLY the rewritten prompt text, nothing else.`,
                         log("Safe reference image created successfully.", "success");
                     } else {
                         // Fallback to just text sanitization if image gen fails
-                        log("Image generation failed. Falling back to text sanitization...", "warn");
+                        log("Image generation failed. Falling back to text sanitization...", "warn", { verbose: true });
                         const newPrompt = await sanitizePrompt(currentPrompt);
-                        log(`Sanitized Prompt: "${newPrompt.substring(0, 80)}..."`, "info");
+                        log(`Sanitized Prompt updated.`, "info", {
+                            context: {
+                                attempt: attempts,
+                                newLength: newPrompt.length
+                            },
+                            verbose: true
+                        });
                         currentPrompt = newPrompt;
                     }
                 } else {
                     // Strategy 2: Hard Sanitize (Last Resort)
-                    log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system");
+                    log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system", { verbose: true });
                     currentPrompt = "Abstract cinematic music video scene, atmospheric lighting, moody, high quality, 4k";
                     log(`Hard-coded fallback prompt applied.`, "warn");
                 }
@@ -811,7 +1174,9 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 
     // If we exit the loop without returning, all attempts failed
-    log(`All ${maxAttempts} attempts exhausted. Scene render failed.`, "error");
+    log(`All ${maxAttempts} attempts exhausted. Scene render failed.`, "error", {
+        context: { totalElapsedMs: Math.round(performance.now() - renderStart) }
+    });
     projectState.scenes[sceneIndex].status = 'error';
     projectState.scenes[sceneIndex].errorMsg = "Max retry attempts reached";
     renderSceneList();
@@ -896,13 +1261,19 @@ playPauseBtn.addEventListener('click', () => {
         iconPlay.classList.add('hidden');
         iconPause.classList.remove('hidden');
         startPlaybackEngine();
-        log("Playback started.", "info");
+        log("Playback started.", "info", {
+            context: { atTime: audioEl.currentTime },
+            verbose: true
+        });
     } else {
         audioEl.pause();
         iconPlay.classList.remove('hidden');
         iconPause.classList.add('hidden');
         stopPlaybackEngine();
-        log("Playback paused.", "info");
+        log("Playback paused.", "info", {
+            context: { atTime: audioEl.currentTime },
+            verbose: true
+        });
     }
 });
 
@@ -936,6 +1307,19 @@ function startPlaybackEngine() {
             }
             highlightActiveScene(activeScene.id);
 
+            if (lastActiveSceneId !== activeScene.id) {
+                log('Scene transition detected.', 'system', {
+                    context: {
+                        from: lastActiveSceneId || 'none',
+                        to: activeScene.id,
+                        playbackTime: t,
+                        layer: activeVideoLayer
+                    },
+                    verbose: true
+                });
+                lastActiveSceneId = activeScene.id;
+            }
+
             // Check if we need to switch video
             // We check the dataset 'sceneId' on the ACTIVE video layer
             const currentLayer = activeVideoLayer === 1 ? videoLayer1 : videoLayer2;
@@ -966,6 +1350,7 @@ function startPlaybackEngine() {
 }
 
 function performTransition(newUrl: string, newSceneId: string) {
+    const transitionStart = performance.now();
     const incomingLayer = activeVideoLayer === 1 ? videoLayer2 : videoLayer1;
     const outgoingLayer = activeVideoLayer === 1 ? videoLayer1 : videoLayer2;
 
@@ -1011,7 +1396,14 @@ function performTransition(newUrl: string, newSceneId: string) {
 
     // 3. Swap Active Index
     activeVideoLayer = activeVideoLayer === 1 ? 2 : 1;
-    log(`Switched to scene ${newSceneId} (${effect})`, 'system');
+    log(`Switched to scene ${newSceneId} (${effect})`, 'system', {
+        context: {
+            effect,
+            incomingLayer: activeVideoLayer,
+            durationMs: Math.round(performance.now() - transitionStart)
+        },
+        verbose: true
+    });
 }
 
 function stopPlaybackEngine() {
