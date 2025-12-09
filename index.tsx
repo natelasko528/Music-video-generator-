@@ -81,6 +81,8 @@ const renderAllBtn = document.getElementById('render-all-btn') as HTMLButtonElem
 const videoLayer1 = document.getElementById('video-layer-1') as HTMLVideoElement;
 const videoLayer2 = document.getElementById('video-layer-2') as HTMLVideoElement;
 let activeVideoLayer = 1; // 1 or 2
+let currentHighlightedSceneId: string | null = null;
+let lastNowPlayingMessage = '';
 
 const playPauseBtn = document.getElementById('play-pause-master') as HTMLButtonElement;
 const iconPlay = document.getElementById('icon-play') as HTMLElement;
@@ -93,6 +95,10 @@ const saveStatus = document.getElementById('save-status') as HTMLElement;
 
 const debugOutput = document.getElementById('debug-output') as HTMLDivElement;
 const clearConsoleBtn = document.getElementById('clear-console') as HTMLButtonElement;
+
+// Initialize layer scene ids for safer comparisons during playback swaps
+videoLayer1.setAttribute('data-scene-id', 'blank');
+videoLayer2.setAttribute('data-scene-id', 'blank');
 
 // --- Logging System ---
 
@@ -117,6 +123,47 @@ clearConsoleBtn.addEventListener('click', () => {
     debugOutput.innerHTML = '';
     log('Console cleared.', 'system');
 });
+
+// --- Playback/Timeline UI Helpers ---
+
+function setNowPlaying(message: string, tone: 'info' | 'warn' | 'error' | 'ready' = 'info') {
+    const keyedMessage = `${tone}:${message}`;
+    if (keyedMessage === lastNowPlayingMessage) return; // avoid excessive DOM churn
+    lastNowPlayingMessage = keyedMessage;
+
+    let dotClass = 'bg-white/60';
+    if (tone === 'ready') dotClass = 'bg-neon-green';
+    if (tone === 'warn') dotClass = 'bg-yellow-400';
+    if (tone === 'error') dotClass = 'bg-red-500';
+
+    const pulseClass = tone === 'ready' ? 'animate-pulse' : '';
+    nowPlayingText.innerHTML = `
+        <span class="w-1.5 h-1.5 rounded-full ${dotClass} ${pulseClass}"></span>
+        <span>${message}</span>
+    `;
+}
+
+function resetPlaybackUI() {
+    progressBar.style.width = '0%';
+    currentTimeEl.textContent = formatTime(0);
+    totalTimeEl.textContent = formatTime(projectState.audioDuration || 0);
+    highlightActiveScene(null);
+}
+
+function highlightActiveScene(sceneId: string | null) {
+    if (sceneId === currentHighlightedSceneId) return;
+    currentHighlightedSceneId = sceneId;
+
+    document.querySelectorAll<HTMLElement>('[data-scene-id]').forEach(el => {
+        const isActive = sceneId && el.dataset.sceneId === sceneId;
+        el.classList.toggle('ring-2', !!isActive);
+        el.classList.toggle('ring-neon-green/70', !!isActive);
+        el.classList.toggle('shadow-lg', !!isActive);
+        el.classList.toggle('shadow-neon-green/10', !!isActive);
+    });
+}
+
+setNowPlaying('Upload audio to start', 'warn');
 
 // --- Helper Functions ---
 
@@ -168,6 +215,13 @@ function loadState() {
             const parsed = JSON.parse(saved);
             projectState = { ...projectState, ...parsed };
 
+            // VALIDATION: Ensure aspectRatio is valid (Veo 3.1 only supports 16:9 and 9:16)
+            const validAspectRatios = ['16:9', '9:16'];
+            if (!validAspectRatios.includes(projectState.aspectRatio)) {
+                log(`Invalid aspect ratio "${projectState.aspectRatio}" found. Auto-correcting to 16:9.`, "warn");
+                projectState.aspectRatio = '16:9';
+            }
+
             // Restore UI
             promptInput.value = projectState.lyrics;
             aspectRatioSelect.value = projectState.aspectRatio;
@@ -204,6 +258,7 @@ function saveState() {
 audioInput.addEventListener('change', (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
+        setNowPlaying('Loading audio...', 'info');
         audioBlobUrl = URL.createObjectURL(file);
         audioEl.src = audioBlobUrl;
         audioEl.load();
@@ -216,6 +271,20 @@ audioEl.addEventListener('loadedmetadata', () => {
     audioDurationEl.textContent = formatTime(projectState.audioDuration);
     totalTimeEl.textContent = formatTime(projectState.audioDuration);
     saveState();
+    setNowPlaying('Ready to play timeline', 'ready');
+});
+
+audioEl.addEventListener('error', () => {
+    log('Audio failed to load. Please try another file.', 'error');
+    alert('Audio failed to load. Please try another file.');
+    projectState.audioDuration = 0;
+    audioDurationEl.textContent = '00:00';
+    totalTimeEl.textContent = '00:00';
+    resetPlaybackUI();
+    stopPlaybackEngine();
+    iconPlay.classList.remove('hidden');
+    iconPause.classList.add('hidden');
+    setNowPlaying('Audio failed to load', 'error');
 });
 
 // --- Settings Handling ---
@@ -407,6 +476,7 @@ function renderSceneList() {
     projectState.scenes.forEach((scene, index) => {
         const div = document.createElement('div');
         div.className = `group flex gap-3 p-3 rounded-lg border bg-[#1a1a1a] hover:bg-[#202020] transition-colors ${scene.status === 'generating' ? 'border-blue-500 shadow-blue-900/20 shadow-lg' : scene.status === 'sanitizing' ? 'border-yellow-500' : 'border-gray-800'}`;
+        div.dataset.sceneId = scene.id;
 
         // Status Color
         let statusDot = "bg-gray-600";
@@ -414,6 +484,22 @@ function renderSceneList() {
         if (scene.status === 'sanitizing') statusDot = "bg-yellow-500 animate-pulse";
         if (scene.status === 'done') statusDot = "bg-green-500";
         if (scene.status === 'error') statusDot = "bg-red-500";
+
+        let statusLabel = "Pending render";
+        let statusLabelClass = "text-gray-500";
+        if (scene.status === 'generating') {
+            statusLabel = "Rendering...";
+            statusLabelClass = "text-blue-400";
+        } else if (scene.status === 'sanitizing') {
+            statusLabel = "Safety retry";
+            statusLabelClass = "text-yellow-400";
+        } else if (scene.status === 'done') {
+            statusLabel = "Clip ready";
+            statusLabelClass = "text-green-500";
+        } else if (scene.status === 'error') {
+            statusLabel = "Error";
+            statusLabelClass = "text-red-400";
+        }
 
         // Thumbnail
         let thumbnail = `<div class="w-24 h-14 bg-black rounded flex items-center justify-center text-[10px] text-gray-700 font-mono">Pending</div>`;
@@ -440,6 +526,7 @@ function renderSceneList() {
                 <div>
                     <p class="text-xs text-gray-300 font-medium truncate mb-0.5" title="${scene.description}">${scene.description}</p>
                     <p class="text-[10px] text-gray-500 font-mono line-clamp-2 leading-tight" title="${scene.visualPrompt}">${scene.visualPrompt}</p>
+                    <p class="text-[10px] font-mono mt-1 ${statusLabelClass}">${statusLabel}${scene.videoUrl ? '' : ''}</p>
                 </div>
                 ${scene.errorMsg ? `<p class="text-[10px] text-red-400 mt-1">Error: ${scene.errorMsg}</p>` : ''}
             </div>
@@ -608,13 +695,15 @@ Return ONLY the rewritten prompt text, nothing else.`,
             log(`Operation Name: ${veoOperation.name || 'N/A'}`, "info");
             log(`Polling for completion...`, "info");
 
-            // Poll with progress updates
+            // Poll with progress updates (every 10s, log every 3rd)
             let pollCount = 0;
             while (!veoOperation.done) {
                 pollCount++;
-                await new Promise(r => setTimeout(r, 4000));
+                await new Promise(r => setTimeout(r, 10000)); // 10 second intervals
                 veoOperation = await ai.operations.getVideosOperation({ operation: veoOperation });
-                log(`Poll #${pollCount}: done=${veoOperation.done}`, "info");
+                if (pollCount % 3 === 0 || veoOperation.done) {
+                    log(`Scene #${sceneIndex + 1} Poll #${pollCount}: done=${veoOperation.done}`, "info");
+                }
             }
 
             log(`Polling complete after ${pollCount} polls.`, "success");
@@ -729,17 +818,67 @@ Return ONLY the rewritten prompt text, nothing else.`,
 };
 
 renderAllBtn.addEventListener('click', async () => {
-    if (!confirm("Start rendering all pending scenes? This may take time.")) return;
+    if (!confirm("Start rendering all pending scenes? This will run 4 videos in parallel.")) return;
 
-    log("Batch rendering initiated.", "system");
-    for (const scene of projectState.scenes) {
-        if (scene.status !== 'done') {
-            await (window as any).renderSingleScene(scene.id);
-            // Brief pause
-            await new Promise(r => setTimeout(r, 2000));
-        }
+    log("Batch rendering initiated (Parallel Mode: 4 threads).", "system");
+
+    const pendingScenes = projectState.scenes.filter(s => s.status !== 'done');
+    if (pendingScenes.length === 0) {
+        log("No pending scenes to render.", "info");
+        return;
     }
-    log("Batch rendering complete.", "success");
+
+    // Concurrency Control
+    const CONCURRENCY_LIMIT = 4;
+    let activeGenerations = 0;
+    let currentIndex = 0;
+
+    // Helper to process the queue
+    const processQueue = async () => {
+        const promises = [];
+
+        while (currentIndex < pendingScenes.length) {
+            // Fill up to the limit
+            if (activeGenerations < CONCURRENCY_LIMIT) {
+                const scene = pendingScenes[currentIndex];
+                currentIndex++;
+                activeGenerations++;
+
+                // Start the render and manage the active count
+                const p = (window as any).renderSingleScene(scene.id)
+                    .then(() => {
+                        activeGenerations--;
+                    })
+                    .catch((e: any) => {
+                        console.error(`Batch render error for scene ${scene.id}:`, e);
+                        activeGenerations--;
+                    });
+
+                promises.push(p);
+
+                // Brief stagger to avoid hitting instant rate limits
+                await new Promise(r => setTimeout(r, 500));
+            } else {
+                // Wait for any slot to free up before adding more
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
+
+        // Wait for all remaining to finish
+        await Promise.all(promises);
+    };
+
+    try {
+        await processQueue();
+        // Final check to ensure all promises resolved if the loop exited early (paranoid check)
+        while (activeGenerations > 0) {
+            await new Promise(r => setTimeout(r, 1000));
+        }
+        log("Batch rendering complete.", "success");
+    } catch (e) {
+        console.error("Batch Queue Error", e);
+        log("Batch rendering stopped due to error.", "error");
+    }
 });
 
 
@@ -747,7 +886,11 @@ renderAllBtn.addEventListener('click', async () => {
 
 playPauseBtn.addEventListener('click', () => {
     if (audioEl.paused) {
-        if (!projectState.audioDuration) return alert("Upload audio first");
+        if (!projectState.audioDuration) {
+            alert("Upload audio first");
+            setNowPlaying('Upload audio to play', 'warn');
+            return;
+        }
 
         audioEl.play();
         iconPlay.classList.add('hidden');
@@ -764,6 +907,13 @@ playPauseBtn.addEventListener('click', () => {
 });
 
 function startPlaybackEngine() {
+    if (masterPlaybackInterval) return; // Avoid stacking intervals
+    if (!projectState.audioDuration) {
+        setNowPlaying('Upload audio to play', 'warn');
+        return;
+    }
+
+    setNowPlaying('Playing timeline', 'ready');
     masterPlaybackInterval = window.setInterval(() => {
         const t = audioEl.currentTime;
         currentTimeEl.textContent = formatTime(t);
@@ -777,7 +927,14 @@ function startPlaybackEngine() {
         const activeScene = projectState.scenes[activeSceneIndex];
 
         if (activeScene) {
-            nowPlayingText.textContent = `Scene ${activeSceneIndex + 1}: ${activeScene.description}`;
+            if (activeScene.videoUrl) {
+                setNowPlaying(`Scene ${activeSceneIndex + 1}: ${activeScene.description}`, 'ready');
+            } else if (activeScene.status === 'error') {
+                setNowPlaying(`Scene ${activeSceneIndex + 1} failed - render again`, 'error');
+            } else {
+                setNowPlaying(`Scene ${activeSceneIndex + 1}: awaiting render`, 'warn');
+            }
+            highlightActiveScene(activeScene.id);
 
             // Check if we need to switch video
             // We check the dataset 'sceneId' on the ACTIVE video layer
@@ -790,6 +947,11 @@ function startPlaybackEngine() {
                 // If scene not rendered yet, maybe show placeholder?
                 // For now, we just keep playing previous or show nothing.
             }
+        } else if (!projectState.scenes.length) {
+            setNowPlaying('Audio playing - no timeline yet', 'warn');
+            highlightActiveScene(null);
+        } else {
+            highlightActiveScene(null);
         }
 
         if (audioEl.ended) {
@@ -797,6 +959,7 @@ function startPlaybackEngine() {
             iconPlay.classList.remove('hidden');
             iconPause.classList.add('hidden');
             log("Playback finished.", "info");
+            setNowPlaying('Playback finished', 'info');
         }
 
     }, 50); // High frequency for smooth triggers
@@ -858,6 +1021,7 @@ function stopPlaybackEngine() {
     }
     videoLayer1.pause();
     videoLayer2.pause();
+    highlightActiveScene(null);
 }
 
 // Initial Load
