@@ -9,50 +9,50 @@ import { GoogleGenAI, Type } from '@google/genai';
 // --- Types & Interfaces ---
 
 interface Scene {
-  id: string;
-  startTime: number;
-  endTime: number;
-  description: string;
-  visualPrompt: string; // The optimized prompt for Veo
-  status: 'pending' | 'generating' | 'done' | 'error' | 'sanitizing';
-  videoUri?: string;
-  videoUrl?: string; // Blob URL
-  errorMsg?: string;
+    id: string;
+    startTime: number;
+    endTime: number;
+    description: string;
+    visualPrompt: string; // The optimized prompt for Veo
+    status: 'pending' | 'generating' | 'done' | 'error' | 'sanitizing';
+    videoUri?: string;
+    videoUrl?: string; // Blob URL
+    errorMsg?: string;
 }
 
 interface ProjectState {
-  scenes: Scene[];
-  lyrics: string;
-  clipLength: number;
-  aspectRatio: string;
-  styleImageBase64: string;
-  styleImageMime: string;
-  audioDuration: number;
-  transitionType: 'cut' | 'crossfade' | 'fadeblack';
+    scenes: Scene[];
+    lyrics: string;
+    clipLength: number;
+    aspectRatio: string;
+    styleImageBase64: string;
+    styleImageMime: string;
+    audioDuration: number;
+    transitionType: 'cut' | 'crossfade' | 'fadeblack';
 }
 
 // --- Globals ---
 
 declare global {
-  interface AIStudio {
-    openSelectKey: () => Promise<void>;
-    hasSelectedApiKey: () => Promise<boolean>;
-  }
-  interface Window {
-    aistudio?: AIStudio;
-    renderSingleScene?: (id: string) => Promise<void>;
-  }
+    interface AIStudio {
+        openSelectKey: () => Promise<void>;
+        hasSelectedApiKey: () => Promise<boolean>;
+    }
+    interface Window {
+        aistudio?: AIStudio;
+        renderSingleScene?: (id: string) => Promise<void>;
+    }
 }
 
 let projectState: ProjectState = {
-  scenes: [],
-  lyrics: '',
-  clipLength: 5,
-  aspectRatio: '16:9',
-  styleImageBase64: '',
-  styleImageMime: '',
-  audioDuration: 0,
-  transitionType: 'cut'
+    scenes: [],
+    lyrics: '',
+    clipLength: 5,
+    aspectRatio: '16:9',
+    styleImageBase64: '',
+    styleImageMime: '',
+    audioDuration: 0,
+    transitionType: 'cut'
 };
 
 let audioBlobUrl: string | null = null;
@@ -99,7 +99,7 @@ const clearConsoleBtn = document.getElementById('clear-console') as HTMLButtonEl
 function log(message: string, type: 'info' | 'success' | 'warn' | 'error' | 'system' = 'info') {
     const entry = document.createElement('div');
     const timestamp = new Date().toLocaleTimeString().split(' ')[0];
-    
+
     let colorClass = 'text-gray-400';
     if (type === 'success') colorClass = 'text-green-400';
     if (type === 'warn') colorClass = 'text-yellow-400';
@@ -108,7 +108,7 @@ function log(message: string, type: 'info' | 'success' | 'warn' | 'error' | 'sys
 
     entry.innerHTML = `<span class="text-gray-600 mr-2">[${timestamp}]</span><span class="${colorClass}">${message}</span>`;
     entry.className = "border-b border-gray-800/50 pb-0.5 mb-0.5 break-words";
-    
+
     debugOutput.appendChild(entry);
     debugOutput.scrollTop = debugOutput.scrollHeight;
 }
@@ -121,94 +121,94 @@ clearConsoleBtn.addEventListener('click', () => {
 // --- Helper Functions ---
 
 async function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      if (result) {
-        resolve(result.split(',')[1]);
-      } else {
-        reject(new Error('FileReader returned empty result'));
-      }
-    };
-    reader.onerror = () => reject(new Error('FileReader failed to read blob'));
-    reader.readAsDataURL(blob);
-  });
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = reader.result as string;
+            if (result) {
+                resolve(result.split(',')[1]);
+            } else {
+                reject(new Error('FileReader returned empty result'));
+            }
+        };
+        reader.onerror = () => reject(new Error('FileReader failed to read blob'));
+        reader.readAsDataURL(blob);
+    });
 }
 
 function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 async function checkApiKey() {
-  let hasKey = false;
-  if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-    hasKey = await window.aistudio.hasSelectedApiKey();
-  }
-
-  if (!hasKey && !process.env.API_KEY) {
-    if (window.aistudio?.openSelectKey) {
-        log("Requesting API Key selection...", "warn");
-        await window.aistudio.openSelectKey();
-    } else {
-        alert("API Key missing");
-        throw new Error("API Key missing");
+    let hasKey = false;
+    if (window.aistudio && window.aistudio.hasSelectedApiKey) {
+        hasKey = await window.aistudio.hasSelectedApiKey();
     }
-  }
+
+    if (!hasKey && !process.env.API_KEY) {
+        if (window.aistudio?.openSelectKey) {
+            log("Requesting API Key selection...", "warn");
+            await window.aistudio.openSelectKey();
+        } else {
+            alert("API Key missing");
+            throw new Error("API Key missing");
+        }
+    }
 }
 
 // --- State Management ---
 
 function loadState() {
-  const saved = localStorage.getItem('music-video-project');
-  if (saved) {
-    try {
-        const parsed = JSON.parse(saved);
-        projectState = { ...projectState, ...parsed };
-        
-        // Restore UI
-        promptInput.value = projectState.lyrics;
-        aspectRatioSelect.value = projectState.aspectRatio;
-        clipLengthSelect.value = projectState.clipLength.toString();
-        transitionSelect.value = projectState.transitionType;
-        
-        if (projectState.styleImageBase64) {
-            stylePreview.src = `data:${projectState.styleImageMime};base64,${projectState.styleImageBase64}`;
-            stylePreview.classList.remove('hidden');
+    const saved = localStorage.getItem('music-video-project');
+    if (saved) {
+        try {
+            const parsed = JSON.parse(saved);
+            projectState = { ...projectState, ...parsed };
+
+            // Restore UI
+            promptInput.value = projectState.lyrics;
+            aspectRatioSelect.value = projectState.aspectRatio;
+            clipLengthSelect.value = projectState.clipLength.toString();
+            transitionSelect.value = projectState.transitionType;
+
+            if (projectState.styleImageBase64) {
+                stylePreview.src = `data:${projectState.styleImageMime};base64,${projectState.styleImageBase64}`;
+                stylePreview.classList.remove('hidden');
+            }
+
+            renderSceneList();
+            log("Project state restored from local storage.", "system");
+        } catch (e) {
+            console.error("Failed to load state", e);
+            log("Failed to load saved state.", "error");
         }
-        
-        renderSceneList();
-        log("Project state restored from local storage.", "system");
-    } catch(e) {
-        console.error("Failed to load state", e);
-        log("Failed to load saved state.", "error");
     }
-  }
 }
 
 function saveState() {
-  localStorage.setItem('music-video-project', JSON.stringify({
-      ...projectState,
-      scenes: projectState.scenes.map(s => ({...s, videoUrl: undefined})) // Don't save blob URLs
-  }));
-  
-  saveStatus.textContent = "Saved " + new Date().toLocaleTimeString();
-  saveStatus.classList.add('text-green-500');
-  setTimeout(() => saveStatus.classList.remove('text-green-500'), 1000);
+    localStorage.setItem('music-video-project', JSON.stringify({
+        ...projectState,
+        scenes: projectState.scenes.map(s => ({ ...s, videoUrl: undefined })) // Don't save blob URLs
+    }));
+
+    saveStatus.textContent = "Saved " + new Date().toLocaleTimeString();
+    saveStatus.classList.add('text-green-500');
+    setTimeout(() => saveStatus.classList.remove('text-green-500'), 1000);
 }
 
 // --- Audio Handling ---
 
 audioInput.addEventListener('change', (e) => {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (file) {
-    audioBlobUrl = URL.createObjectURL(file);
-    audioEl.src = audioBlobUrl;
-    audioEl.load();
-    log(`Audio loaded: ${file.name}`, 'success');
-  }
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (file) {
+        audioBlobUrl = URL.createObjectURL(file);
+        audioEl.src = audioBlobUrl;
+        audioEl.load();
+        log(`Audio loaded: ${file.name}`, 'success');
+    }
 });
 
 audioEl.addEventListener('loadedmetadata', () => {
@@ -254,7 +254,7 @@ promptInput.addEventListener('input', () => {
 });
 
 clearProjectBtn.addEventListener('click', () => {
-    if(confirm("Are you sure? This will delete all generated scenes.")) {
+    if (confirm("Are you sure? This will delete all generated scenes.")) {
         localStorage.removeItem('music-video-project');
         location.reload();
     }
@@ -269,7 +269,7 @@ planButton.addEventListener('click', async () => {
         log("Planning aborted: No audio track.", "warn");
         return;
     }
-    
+
     if (!promptInput.value.trim()) {
         alert("Please enter lyrics or a vibe description.");
         return;
@@ -277,13 +277,13 @@ planButton.addEventListener('click', async () => {
 
     await checkApiKey();
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
+
     planButton.disabled = true;
     planButton.innerHTML = `<span class="animate-pulse">Director Planning...</span>`;
     log("Starting storyboard generation with Gemini 3.0...", "system");
 
     const numClips = Math.ceil(projectState.audioDuration / projectState.clipLength);
-    
+
     const systemInstruction = `
     You are a professional Music Video Director creating content for AI video generation.
     TASK: Create a visual storyboard for a song that is ${Math.round(projectState.audioDuration)} seconds long.
@@ -351,7 +351,7 @@ planButton.addEventListener('click', async () => {
         });
 
         const plan = JSON.parse(response.text);
-        
+
         projectState.scenes = plan.scenes.map((s: any, index: number) => ({
             id: `scene-${index}`,
             startTime: index * projectState.clipLength,
@@ -395,34 +395,34 @@ planButton.addEventListener('click', async () => {
 
 function renderSceneList() {
     sceneContainer.innerHTML = '';
-    
+
     if (projectState.scenes.length === 0) {
         sceneContainer.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-gray-700 border border-dashed border-gray-800 rounded-xl"><p class="text-sm">Timeline Empty</p></div>`;
         renderAllBtn.disabled = true;
         return;
     }
-    
+
     renderAllBtn.disabled = false;
 
     projectState.scenes.forEach((scene, index) => {
         const div = document.createElement('div');
         div.className = `group flex gap-3 p-3 rounded-lg border bg-[#1a1a1a] hover:bg-[#202020] transition-colors ${scene.status === 'generating' ? 'border-blue-500 shadow-blue-900/20 shadow-lg' : scene.status === 'sanitizing' ? 'border-yellow-500' : 'border-gray-800'}`;
-        
+
         // Status Color
         let statusDot = "bg-gray-600";
         if (scene.status === 'generating') statusDot = "bg-blue-500 animate-pulse";
         if (scene.status === 'sanitizing') statusDot = "bg-yellow-500 animate-pulse";
         if (scene.status === 'done') statusDot = "bg-green-500";
         if (scene.status === 'error') statusDot = "bg-red-500";
-        
+
         // Thumbnail
         let thumbnail = `<div class="w-24 h-14 bg-black rounded flex items-center justify-center text-[10px] text-gray-700 font-mono">Pending</div>`;
         if (scene.videoUrl) {
             thumbnail = `<video src="${scene.videoUrl}" class="w-24 h-14 bg-black rounded object-cover cursor-pointer" muted onmouseover="this.play()" onmouseout="this.pause()" onclick="window.previewScene('${scene.videoUrl}')"></video>`;
         } else if (scene.status === 'generating') {
-             thumbnail = `<div class="w-24 h-14 bg-black rounded flex items-center justify-center text-[10px] text-blue-400 font-mono">Rendering...</div>`;
+            thumbnail = `<div class="w-24 h-14 bg-black rounded flex items-center justify-center text-[10px] text-blue-400 font-mono">Rendering...</div>`;
         } else if (scene.status === 'sanitizing') {
-             thumbnail = `<div class="w-24 h-14 bg-black rounded flex items-center justify-center text-[10px] text-yellow-400 font-mono text-center leading-tight">Safety<br>Fixing...</div>`;
+            thumbnail = `<div class="w-24 h-14 bg-black rounded flex items-center justify-center text-[10px] text-yellow-400 font-mono text-center leading-tight">Safety<br>Fixing...</div>`;
         }
 
         div.innerHTML = `
@@ -445,12 +445,12 @@ function renderSceneList() {
             </div>
 
             <div class="flex-shrink-0 flex flex-col justify-center gap-2">
-                 ${(scene.status !== 'generating' && scene.status !== 'sanitizing') ? 
-                   `<button onclick="window.renderSingleScene('${scene.id}')" class="text-[10px] bg-gray-800 hover:bg-white hover:text-black border border-gray-700 text-gray-300 px-2 py-1 rounded transition-colors whitespace-nowrap">
+                 ${(scene.status !== 'generating' && scene.status !== 'sanitizing') ?
+                `<button onclick="window.renderSingleScene('${scene.id}')" class="text-[10px] bg-gray-800 hover:bg-white hover:text-black border border-gray-700 text-gray-300 px-2 py-1 rounded transition-colors whitespace-nowrap">
                       ${scene.status === 'done' ? 'Re-Render' : 'Render'}
-                   </button>` : 
-                   `<span class="text-[10px] text-blue-500 font-mono">Processing</span>`
-                 }
+                   </button>` :
+                `<span class="text-[10px] text-blue-500 font-mono">Processing</span>`
+            }
             </div>
         `;
         sceneContainer.appendChild(div);
@@ -481,10 +481,10 @@ function detectSafetyCategory(errorMessage: string): 'violence' | 'substance' | 
     return 'general';
 }
 
-async function generateSafeReferenceImage(prompt: string): Promise<{base64: string, mime: string} | null> {
+async function generateSafeReferenceImage(prompt: string): Promise<{ base64: string, mime: string } | null> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     log("Generating safe reference image to guide Veo...", "warn");
-    
+
     try {
         // Use Imagen 3 to create a safe reference image
         const response = await ai.models.generateImages({
@@ -540,20 +540,20 @@ Return ONLY the rewritten prompt text, nothing else.`,
 (window as any).renderSingleScene = async (sceneId: string) => {
     await checkApiKey();
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    
+
     const sceneIndex = projectState.scenes.findIndex(s => s.id === sceneId);
     if (sceneIndex === -1) return;
-    
+
     // Update State
     projectState.scenes[sceneIndex].status = 'generating';
     projectState.scenes[sceneIndex].errorMsg = undefined;
     renderSceneList();
     log(`Starting render for Scene #${sceneIndex + 1}...`, "info");
-    
+
     let currentPrompt = projectState.scenes[sceneIndex].visualPrompt;
     let attempts = 0;
     const maxAttempts = 3; // 1. Original/Sanitized -> 2. Image-First -> 3. Hard Sanitize
-    
+
     // Check if we have a global style image
     let styleImage = projectState.styleImageBase64 ? {
         imageBytes: projectState.styleImageBase64,
@@ -562,7 +562,7 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
     while (attempts < maxAttempts) {
         attempts++;
-        
+
         try {
             const videoConfig: any = {
                 numberOfVideos: 1,
@@ -571,18 +571,18 @@ Return ONLY the rewritten prompt text, nothing else.`,
             };
 
             let veoOperation;
-            
+
             // LOGIC: Use style image if available (Global or Generated Safe Reference)
             if (styleImage) {
-                 log(`Using reference image for generation...`, 'info');
-                 veoOperation = await ai.models.generateVideos({
+                log(`Using reference image for generation...`, 'info');
+                veoOperation = await ai.models.generateVideos({
                     model: 'veo-3.1-generate-preview',
                     prompt: currentPrompt,
                     image: styleImage,
                     config: videoConfig
                 });
             } else {
-                 veoOperation = await ai.models.generateVideos({
+                veoOperation = await ai.models.generateVideos({
                     model: 'veo-3.1-generate-preview',
                     prompt: currentPrompt,
                     config: videoConfig
@@ -611,12 +611,12 @@ Return ONLY the rewritten prompt text, nothing else.`,
                     throw new Error("Downloaded video is empty");
                 }
                 const blobUrl = URL.createObjectURL(blob);
-                
+
                 projectState.scenes[sceneIndex].status = 'done';
                 projectState.scenes[sceneIndex].videoUri = uri;
                 projectState.scenes[sceneIndex].videoUrl = blobUrl;
                 projectState.scenes[sceneIndex].visualPrompt = currentPrompt;
-                
+
                 saveState();
                 renderSceneList();
                 return; // Success, exit function
@@ -626,43 +626,47 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
         } catch (e: any) {
             console.error(e);
-            
+
             if (attempts < maxAttempts && (e.message.includes("Safety") || e.message.includes("no video"))) {
                 const category = detectSafetyCategory(e.message);
                 log(`Veo blocked request (${category}): ${e.message}`, "warn");
-                
+
                 projectState.scenes[sceneIndex].status = 'sanitizing';
                 renderSceneList();
-                
+
                 // STRATEGY SWITCHING
                 if (attempts === 1) {
                     // Strategy 1: Smart Sanitize + Generate Safe Image
-                    // If we don't have a style image yet, generate one now to bypass text filters
-                    if (!styleImage) {
-                        log("Strategy: Generating Safe Reference Image to bypass...", "system");
-                        const safeImage = await generateSafeReferenceImage(currentPrompt);
-                        if (safeImage) {
-                            styleImage = {
-                                imageBytes: safeImage.base64,
-                                mimeType: safeImage.mime
-                            };
-                            log("Safe reference image created. Retrying...", "success");
-                        } else {
-                             // Fallback to just text sanitization if image gen fails
-                             const newPrompt = await sanitizePrompt(currentPrompt);
-                             currentPrompt = newPrompt;
-                        }
+
+                    // If we used a style image (whether User or Generated) and it failed, DROP IT.
+                    // It might be the trigger.
+                    if (styleImage) {
+                        log("Strategy: Dropping previous style image (potential safety trigger).", "warn");
+                        styleImage = undefined;
+                    }
+
+                    // Now try to generate a NEW safe reference image to guide Veo
+                    log("Strategy: Generating Safe Reference Image to bypass filters...", "system");
+                    const safeImage = await generateSafeReferenceImage(currentPrompt);
+
+                    if (safeImage) {
+                        styleImage = {
+                            imageBytes: safeImage.base64,
+                            mimeType: safeImage.mime
+                        };
+                        log("Safe reference image created. Retrying with image...", "success");
                     } else {
-                        // We already had an image, so just sanitize text
-                         const newPrompt = await sanitizePrompt(currentPrompt);
-                         currentPrompt = newPrompt;
+                        // Fallback to just text sanitization if image gen fails
+                        log("Image gen failed. Retrying with sanitized text only.", "warn");
+                        const newPrompt = await sanitizePrompt(currentPrompt);
+                        currentPrompt = newPrompt;
                     }
                 } else {
                     // Strategy 2: Hard Sanitize (Last Resort)
                     log("Strategy: Aggressive Sanitization...", "system");
                     currentPrompt = "Abstract cinematic music video scene, atmospheric lighting, moody, high quality, 4k";
                 }
-                
+
                 projectState.scenes[sceneIndex].status = 'generating';
                 renderSceneList();
                 // Loop continues
@@ -678,8 +682,8 @@ Return ONLY the rewritten prompt text, nothing else.`,
 };
 
 renderAllBtn.addEventListener('click', async () => {
-    if(!confirm("Start rendering all pending scenes? This may take time.")) return;
-    
+    if (!confirm("Start rendering all pending scenes? This may take time.")) return;
+
     log("Batch rendering initiated.", "system");
     for (const scene of projectState.scenes) {
         if (scene.status !== 'done') {
@@ -697,7 +701,7 @@ renderAllBtn.addEventListener('click', async () => {
 playPauseBtn.addEventListener('click', () => {
     if (audioEl.paused) {
         if (!projectState.audioDuration) return alert("Upload audio first");
-        
+
         audioEl.play();
         iconPlay.classList.add('hidden');
         iconPause.classList.remove('hidden');
@@ -716,23 +720,23 @@ function startPlaybackEngine() {
     masterPlaybackInterval = window.setInterval(() => {
         const t = audioEl.currentTime;
         currentTimeEl.textContent = formatTime(t);
-        
+
         // Progress Bar
         const pct = (t / projectState.audioDuration) * 100;
         progressBar.style.width = `${pct}%`;
-        
+
         // Determine Current Scene
         const activeSceneIndex = projectState.scenes.findIndex(s => t >= s.startTime && t < s.endTime);
         const activeScene = projectState.scenes[activeSceneIndex];
-        
+
         if (activeScene) {
             nowPlayingText.textContent = `Scene ${activeSceneIndex + 1}: ${activeScene.description}`;
-            
+
             // Check if we need to switch video
             // We check the dataset 'sceneId' on the ACTIVE video layer
             const currentLayer = activeVideoLayer === 1 ? videoLayer1 : videoLayer2;
             const currentSceneId = currentLayer.getAttribute('data-scene-id');
-            
+
             if (activeScene.videoUrl && currentSceneId !== activeScene.id) {
                 performTransition(activeScene.videoUrl, activeScene.id);
             } else if (!activeScene.videoUrl && currentSceneId !== 'blank') {
@@ -740,7 +744,7 @@ function startPlaybackEngine() {
                 // For now, we just keep playing previous or show nothing.
             }
         }
-        
+
         if (audioEl.ended) {
             stopPlaybackEngine();
             iconPlay.classList.remove('hidden');
@@ -754,12 +758,12 @@ function startPlaybackEngine() {
 function performTransition(newUrl: string, newSceneId: string) {
     const incomingLayer = activeVideoLayer === 1 ? videoLayer2 : videoLayer1;
     const outgoingLayer = activeVideoLayer === 1 ? videoLayer1 : videoLayer2;
-    
+
     // 1. Prepare Incoming Layer
     incomingLayer.src = newUrl;
     incomingLayer.setAttribute('data-scene-id', newSceneId);
     incomingLayer.load();
-    
+
     const playPromise = incomingLayer.play();
     if (playPromise !== undefined) {
         playPromise.catch(error => { /* Autoplay prevented handled silently */ });
@@ -767,34 +771,34 @@ function performTransition(newUrl: string, newSceneId: string) {
 
     // 2. Execute Transition Effect
     const effect = projectState.transitionType;
-    
+
     if (effect === 'cut') {
         incomingLayer.style.transition = 'none';
         outgoingLayer.style.transition = 'none';
         incomingLayer.style.opacity = '1';
         outgoingLayer.style.opacity = '0';
-        
+
     } else if (effect === 'crossfade') {
         incomingLayer.style.transition = 'opacity 1s ease';
         outgoingLayer.style.transition = 'opacity 1s ease';
         incomingLayer.style.opacity = '1';
         outgoingLayer.style.opacity = '0';
-        
+
     } else if (effect === 'fadeblack') {
         // Simple fade logic: Out, wait, In (simplified for web sync)
         // A robust fade-to-black usually requires a 3rd black layer, 
         // but here we can simulate by fading OUT outgoing first, then fading IN incoming.
-        
+
         outgoingLayer.style.transition = 'opacity 0.5s ease';
         incomingLayer.style.transition = 'opacity 0.5s ease 0.5s'; // Delay start
-        
+
         outgoingLayer.style.opacity = '0';
         // Incoming starts at 0, waits 0.5s, then goes to 1
         setTimeout(() => {
-             incomingLayer.style.opacity = '1';
+            incomingLayer.style.opacity = '1';
         }, 50);
     }
-    
+
     // 3. Swap Active Index
     activeVideoLayer = activeVideoLayer === 1 ? 2 : 1;
     log(`Switched to scene ${newSceneId} (${effect})`, 'system');
