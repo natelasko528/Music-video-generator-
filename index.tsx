@@ -121,9 +121,17 @@ clearConsoleBtn.addEventListener('click', () => {
 // --- Helper Functions ---
 
 async function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as string).split(',')[1]);
+    reader.onload = () => {
+      const result = reader.result as string;
+      if (result) {
+        resolve(result.split(',')[1]);
+      } else {
+        reject(new Error('FileReader returned empty result'));
+      }
+    };
+    reader.onerror = () => reject(new Error('FileReader failed to read blob'));
     reader.readAsDataURL(blob);
   });
 }
@@ -277,20 +285,29 @@ planButton.addEventListener('click', async () => {
     const numClips = Math.ceil(projectState.audioDuration / projectState.clipLength);
     
     const systemInstruction = `
-    You are a professional Music Video Director.
+    You are a professional Music Video Director creating content for AI video generation.
     TASK: Create a visual storyboard for a song that is ${Math.round(projectState.audioDuration)} seconds long.
     The video MUST be broken down into exactly ${numClips} sequential scenes, each approx ${projectState.clipLength} seconds.
-    
+
     INPUT CONTEXT:
     Lyrics/Vibe: "${projectState.lyrics}"
     Aspect Ratio: ${projectState.aspectRatio}
-    
+
+    CRITICAL SAFETY REQUIREMENTS (Veo will reject prompts with any of these):
+    - NO money, cash, bills, counting money, or wealth displays
+    - NO drugs, smoking, haze (use "atmospheric fog" or "stage lighting" instead)
+    - NO weapons, violence, or aggressive imagery
+    - NO explicit/suggestive content
+    - NO alcohol or substance references
+    - Use "musician" or "artist" instead of "rapper"
+    - Use "success" metaphors like achievements, stages, spotlights instead of material wealth
+
     INSTRUCTIONS:
     1. Analyze the flow (Intro, Verse, Chorus) based on input.
-    2. Write a "visualPrompt" for Veo for EACH scene.
-    3. SAFETY: Do NOT use explicit violence, gore, or sexual acts. Use darker, moody metaphors (e.g. "red lighting", "stormy clouds") instead of explicit content to avoid safety filters.
-    4. CONSISTENCY: Maintain character/color consistency.
-    
+    2. Write a safe, artistic "visualPrompt" for Veo for EACH scene.
+    3. STYLE: Focus on cinematic camera work, lighting, color grading, urban architecture, and artistic metaphors.
+    4. CONSISTENCY: Maintain character/color consistency throughout.
+
     OUTPUT SCHEMA:
     Return JSON: { scenes: [ { id, startTime, endTime, description, visualPrompt } ] }
     `;
@@ -431,12 +448,26 @@ function renderSceneList() {
 async function sanitizePrompt(originalPrompt: string): Promise<string> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     log("Running Safety Sanitizer on prompt...", "warn");
-    
+
     const response = await ai.models.generateContent({
         model: 'gemini-3-pro-preview',
         contents: { parts: [{ text: `Original Prompt: "${originalPrompt}"` }] },
         config: {
-            systemInstruction: "You are a Safety Filter Bypass Agent. The user's previous video prompt was blocked by a safety filter (likely for violence or explicit concepts). REWRITE the prompt to be safe for a general audience. Use abstract, artistic metaphors (e.g., 'red ink' instead of blood, 'shadows' instead of weapons). Keep the visual aesthetic description. Return ONLY the rewritten prompt text.",
+            systemInstruction: `You are a Video Prompt Rewriter specializing in making prompts safe for AI video generation.
+
+The original prompt was blocked by Veo's safety filter. Your task is to COMPLETELY REWRITE the prompt to be 100% safe while keeping the visual aesthetics.
+
+RULES:
+1. Remove ALL references to: money, cash, drugs, smoking, alcohol, weapons, violence, explicit content
+2. Replace "rapper" with "musician" or "artist"
+3. Replace "counting cash/money" with "working at desk" or "creating music"
+4. Replace "smoking/haze" with "atmospheric fog" or "stage lighting"
+5. Replace "club scene" with "concert venue" or "performance space"
+6. Keep camera angles, lighting descriptions, and color grading
+7. Focus on artistic, cinematic, professional music video aesthetics
+8. Use neutral, professional language throughout
+
+Return ONLY the rewritten prompt text, nothing else.`,
         }
     });
     return response.text;
@@ -457,7 +488,7 @@ async function sanitizePrompt(originalPrompt: string): Promise<string> {
     
     let currentPrompt = projectState.scenes[sceneIndex].visualPrompt;
     let attempts = 0;
-    const maxAttempts = 2; // Original + 1 Retry
+    const maxAttempts = 3; // Original + 2 Retries with progressive sanitization
 
     while (attempts < maxAttempts) {
         attempts++;
@@ -502,9 +533,15 @@ async function sanitizePrompt(originalPrompt: string): Promise<string> {
             if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
                 const uri = veoOperation.response.generatedVideos[0].video.uri;
                 log("Video generated successfully. Downloading...", "success");
-                
+
                 const res = await fetch(`${uri}&key=${process.env.API_KEY}`);
+                if (!res.ok) {
+                    throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
+                }
                 const blob = await res.blob();
+                if (blob.size === 0) {
+                    throw new Error("Downloaded video is empty");
+                }
                 const blobUrl = URL.createObjectURL(blob);
                 
                 projectState.scenes[sceneIndex].status = 'done';
