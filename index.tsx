@@ -20,6 +20,13 @@ interface Scene {
     errorMsg?: string;
 }
 
+const PLANNER_MODELS = {
+    default: 'gemini-3-pro-preview',
+    fast: 'gemini-2.0-nano-banana'
+} as const;
+
+type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
+
 interface ProjectState {
     scenes: Scene[];
     lyrics: string;
@@ -29,6 +36,7 @@ interface ProjectState {
     styleImageMime: string;
     audioDuration: number;
     transitionType: 'cut' | 'crossfade' | 'fadeblack';
+    plannerModel: PlannerModelId;
 }
 
 // --- Globals ---
@@ -52,7 +60,8 @@ let projectState: ProjectState = {
     styleImageBase64: '',
     styleImageMime: '',
     audioDuration: 0,
-    transitionType: 'cut'
+    transitionType: 'cut',
+    plannerModel: PLANNER_MODELS.default
 };
 
 let audioBlobUrl: string | null = null;
@@ -71,6 +80,7 @@ const clearProjectBtn = document.getElementById('clear-project') as HTMLButtonEl
 const aspectRatioSelect = document.getElementById('aspect-ratio') as HTMLSelectElement;
 const clipLengthSelect = document.getElementById('clip-length') as HTMLSelectElement;
 const transitionSelect = document.getElementById('transition-select') as HTMLSelectElement;
+const plannerModelSelect = document.getElementById('planner-model') as HTMLSelectElement;
 const styleInput = document.getElementById('style-image') as HTMLInputElement;
 const stylePreview = document.getElementById('style-preview') as HTMLImageElement;
 
@@ -198,6 +208,19 @@ function formatTime(seconds: number): string {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+function validatePlannerModel(modelId: string): PlannerModelId {
+    const allowedModels = Object.values(PLANNER_MODELS) as string[];
+    if (allowedModels.includes(modelId)) {
+        return modelId as PlannerModelId;
+    }
+    return PLANNER_MODELS.default;
+}
+
+function describePlannerModel(modelId: PlannerModelId): string {
+    if (modelId === PLANNER_MODELS.fast) return 'Gemini Nano Banana (Fast)';
+    return 'Gemini 3 Pro Preview (Default)';
+}
+
 async function checkApiKey() {
     let hasKey = false;
     if (window.aistudio && window.aistudio.hasSelectedApiKey) {
@@ -224,11 +247,14 @@ function loadState() {
             const parsed = JSON.parse(saved);
             projectState = { ...projectState, ...parsed };
 
+            projectState.plannerModel = validatePlannerModel(projectState.plannerModel);
+
             // Restore UI
             promptInput.value = projectState.lyrics;
             aspectRatioSelect.value = projectState.aspectRatio;
             clipLengthSelect.value = projectState.clipLength.toString();
             transitionSelect.value = projectState.transitionType;
+            plannerModelSelect.value = projectState.plannerModel;
 
             if (projectState.styleImageBase64) {
                 stylePreview.src = `data:${projectState.styleImageMime};base64,${projectState.styleImageBase64}`;
@@ -242,6 +268,8 @@ function loadState() {
             log("Failed to load saved state.", "error");
         }
     }
+
+    plannerModelSelect.value = projectState.plannerModel;
 }
 
 function saveState() {
@@ -304,6 +332,17 @@ transitionSelect.addEventListener('change', () => {
     saveState();
 });
 
+plannerModelSelect.addEventListener('change', () => {
+    const validatedModel = validatePlannerModel(plannerModelSelect.value);
+    if (validatedModel !== plannerModelSelect.value) {
+        log('Invalid planner model selection detected. Reverting to default.', 'warn');
+    }
+    projectState.plannerModel = validatedModel;
+    plannerModelSelect.value = validatedModel;
+    log(`Planner model set to: ${describePlannerModel(validatedModel)}`, 'info');
+    saveState();
+});
+
 promptInput.addEventListener('input', () => {
     projectState.lyrics = promptInput.value;
     saveState();
@@ -332,6 +371,14 @@ planButton.addEventListener('click', async () => {
     }
 
     await checkApiKey();
+    const normalizedPlannerModel = validatePlannerModel(projectState.plannerModel);
+    if (normalizedPlannerModel !== projectState.plannerModel) {
+        log('Unknown planner model found in state. Resetting to default.', 'warn');
+        projectState.plannerModel = normalizedPlannerModel;
+        saveState();
+    }
+    plannerModelSelect.value = projectState.plannerModel;
+    log(`Planner model selected: ${describePlannerModel(projectState.plannerModel)} (${projectState.plannerModel})`, 'system');
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     planButton.disabled = true;
@@ -390,8 +437,8 @@ planButton.addEventListener('click', async () => {
     `;
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
+        const generateStoryboard = async (modelId: PlannerModelId) => ai.models.generateContent({
+            model: modelId,
             contents: { parts: [{ text: "Plan the music video storyboard." }] },
             config: {
                 systemInstruction: systemInstruction,
@@ -417,6 +464,23 @@ planButton.addEventListener('click', async () => {
                 }
             }
         });
+
+        let response;
+        try {
+            response = await generateStoryboard(projectState.plannerModel);
+            log(`Planner response received from ${projectState.plannerModel}.`, 'success');
+        } catch (plannerError: any) {
+            if (projectState.plannerModel === PLANNER_MODELS.fast) {
+                log(`Fast planner unavailable (${plannerError?.message || 'error'}). Falling back to Gemini 3 Pro Preview.`, 'warn');
+                projectState.plannerModel = PLANNER_MODELS.default;
+                plannerModelSelect.value = projectState.plannerModel;
+                saveState();
+                response = await generateStoryboard(projectState.plannerModel);
+                log(`Planner response received from fallback model ${projectState.plannerModel}.`, 'success');
+            } else {
+                throw plannerError;
+            }
+        }
 
         const plan = JSON.parse(response.text);
 

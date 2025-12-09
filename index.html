@@ -260,6 +260,15 @@
 
             <textarea id="prompt-input" class="w-full bg-cyber-800/50 border border-gray-700/50 rounded-xl p-3 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-neon-blue/50 focus:ring-1 focus:ring-neon-blue/20 font-mono resize-none h-32 transition-all" placeholder="Paste lyrics or describe the visual style you want..."></textarea>
 
+            <label class="block mt-4">
+              <span class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Planner Model</span>
+              <select id="planner-model" class="w-full bg-cyber-800/50 border border-gray-700/50 rounded-xl p-3 text-sm text-gray-300 focus:outline-none focus:border-neon-purple/50 focus:ring-1 focus:ring-neon-purple/20">
+                <option value="gemini-3-pro-preview">Gemini 3 Pro Preview (Default)</option>
+                <option value="gemini-2.0-nano-banana">Gemini 2 Nano Banana (Fast)</option>
+              </select>
+              <p class="text-[10px] text-gray-600 mt-1">Stored with the project so re-plans reuse the same model.</p>
+            </label>
+
             <button id="plan-button" class="mt-4 w-full relative overflow-hidden group">
               <div class="absolute inset-0 bg-gradient-to-r from-neon-blue via-neon-purple to-neon-pink opacity-100 group-hover:opacity-90 transition-opacity"></div>
               <div class="absolute inset-0 bg-gradient-to-r from-neon-blue via-neon-purple to-neon-pink blur-xl opacity-50 group-hover:opacity-70 transition-opacity"></div>
