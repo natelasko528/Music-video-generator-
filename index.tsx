@@ -1199,14 +1199,14 @@ async function generateVideoWithQwen(
     };
     const size = sizeMap[aspectRatio] || '1280*720';
 
-    log(`Creating Qwen video generation task...`, 'info', {
-        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
+    log(`Creating Wanx video generation task...`, 'info', {
+        context: { model: 'wanx2.1-t2v-turbo', size, promptLength: prompt.length },
         verbose: true
     });
 
     // Step 1: Create video generation task
     const createTaskPayload: any = {
-        model: 'qwen-max-latest',
+        model: 'wanx2.1-t2v-turbo',
         input: {
             prompt: prompt
         },
@@ -1220,7 +1220,7 @@ async function generateVideoWithQwen(
     // Add style image if provided (image-to-video)
     if (styleImageBase64) {
         createTaskPayload.input.image_url = `data:image/png;base64,${styleImageBase64}`;
-        log(`Using reference image for Qwen generation...`, 'info');
+        log(`Using reference image for Wanx generation...`, 'info');
     }
 
     const createResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/generation', {
@@ -1421,7 +1421,7 @@ async function generateVideoWithVeo(
             let videoUri: string | undefined;
 
             if (isQwen) {
-                // Use Qwen for video generation
+                // Use Wanx for video generation
                 log(`Video Config prepared`, "info", {
                     context: {
                         model: videoModel,
@@ -1438,7 +1438,7 @@ async function generateVideoWithVeo(
                     styleImage?.imageBytes
                 );
 
-                log(`Qwen video URL received`, "success");
+                log(`Wanx video URL received`, "success");
                 log("Downloading video...", "info");
 
                 const res = await fetch(result.videoUrl);
