@@ -2,22 +2,17 @@ const STORAGE_KEY = 'music-video-project';
 const STATE_VERSION = 2;
 
 export const PLANNER_MODELS = {
-  default: 'gemini-3-pro-preview',
-  fast: 'gemini-2.0-nano-banana',
+  default: 'gemini-2.5-pro-preview-06-05',
+  fast: 'gemini-2.5-flash-preview-05-20',
 } as const;
 
-// OpenRouter video generation models
-// These are dynamically fetched, but we provide common ones as defaults
+// Google Veo video generation models
 export const VIDEO_MODELS = {
-  'runway/gen3-alpha-turbo': 'runway/gen3-alpha-turbo',
-  'runway/gen3-alpha': 'runway/gen3-alpha',
-  'pika/pika-1.5': 'pika/pika-1.5',
-  'kling/kling-v1': 'kling/kling-v1',
-  'luma/dream-machine': 'luma/dream-machine',
+  'veo-2.0-generate-001': 'veo-2.0-generate-001',
 } as const;
 
 export type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
-export type VideoModelId = string; // OpenRouter supports many video models dynamically
+export type VideoModelId = typeof VIDEO_MODELS[keyof typeof VIDEO_MODELS];
 export type TransitionType = 'cut' | 'crossfade' | 'fadeblack';
 export type SceneStatus = 'pending' | 'generating' | 'done' | 'error' | 'sanitizing';
 export type ActiveTab = 'setup' | 'timeline' | 'preview';
@@ -63,7 +58,7 @@ const DEFAULT_STATE: ProjectState = {
   audioDuration: 0,
   transitionType: 'cut',
   plannerModel: PLANNER_MODELS.default,
-  videoModel: 'runway/gen3-alpha-turbo',
+  videoModel: 'veo-2.0-generate-001',
   activeTab: 'setup',
   lastSavedAt: null,
   version: STATE_VERSION,
@@ -121,26 +116,18 @@ export function validatePlannerModel(modelId: string): PlannerModelId {
 }
 
 export function describePlannerModel(modelId: PlannerModelId): string {
-  if (modelId === PLANNER_MODELS.fast) return 'Gemini Nano Banana (Fast)';
-  return 'Gemini 3 Pro Preview (Default)';
+  if (modelId === PLANNER_MODELS.fast) return 'Gemini 2.5 Flash (Fast)';
+  return 'Gemini 2.5 Pro (Default)';
 }
 
 export function validateVideoModel(modelId: string): VideoModelId {
-  // Allow any string as OpenRouter supports many video models
-  // Default to a common one if invalid
-  if (!modelId || typeof modelId !== 'string') {
-    return 'runway/gen3-alpha-turbo' as VideoModelId;
-  }
-  return modelId as VideoModelId;
+  const allowed = Object.values(VIDEO_MODELS) as string[];
+  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS['veo-2.0-generate-001'];
 }
 
 export function describeVideoModel(modelId: VideoModelId): string {
   const modelNames: Record<string, string> = {
-    'runway/gen3-alpha-turbo': 'Runway Gen-3 Alpha Turbo',
-    'runway/gen3-alpha': 'Runway Gen-3 Alpha',
-    'pika/pika-1.5': 'Pika 1.5',
-    'kling/kling-v1': 'Kling AI v1',
-    'luma/dream-machine': 'Luma Dream Machine',
+    'veo-2.0-generate-001': 'Google Veo 2.0',
   };
   return modelNames[modelId] || modelId;
 }

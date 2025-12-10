@@ -1174,226 +1174,22 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 }
 
-// --- OPENROUTER VIDEO GENERATION ---
-
-interface OpenRouterVideoResult {
-    videoUrl: string;
-    taskId?: string;
-}
-
-async function generateVideoWithOpenRouter(
-    modelId: string,
-    prompt: string,
-    aspectRatio: string,
-    styleImageBase64?: string
-): Promise<OpenRouterVideoResult> {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-        throw new Error('OPENROUTER_API_KEY is not configured. Please add it to your .env.local file.');
-    }
-
-    log(`Creating OpenRouter video generation task...`, 'info', {
-        context: { model: modelId, aspectRatio, promptLength: prompt.length },
-        verbose: true
-    });
-
-    // Map aspect ratio to common video dimensions
-    const aspectRatioMap: Record<string, { width: number; height: number }> = {
-        '16:9': { width: 1920, height: 1080 },
-        '9:16': { width: 1080, height: 1920 },
-        '1:1': { width: 1080, height: 1080 }
-    };
-    const dimensions = aspectRatioMap[aspectRatio] || aspectRatioMap['16:9'];
-
-    // Prepare the request payload for OpenRouter
-    // OpenRouter uses OpenAI-compatible API format for video generation
-    // The exact format may vary by model, so we use a flexible structure
-    const requestBody: any = {
-        model: modelId,
-        prompt: prompt,
-        aspect_ratio: aspectRatio,
-        width: dimensions.width,
-        height: dimensions.height
-    };
-
-    // Add image if provided (for image-to-video models)
-    if (styleImageBase64) {
-        requestBody.image = `data:image/png;base64,${styleImageBase64}`;
-        log(`Using reference image for OpenRouter generation...`, 'info');
-    }
-
-    // Try OpenRouter's video generation endpoint first
-    // If that doesn't exist, fall back to chat/completions with video generation instructions
-    let response;
-    try {
-        // Try dedicated video generation endpoint
-        response = await fetch('https://openrouter.ai/api/v1/video/generations', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': window.location.origin,
-                'X-Title': 'Director\'s Cut - AI Music Video Suite'
-            },
-            body: JSON.stringify(requestBody)
-        });
-    } catch (e) {
-        // Fallback to chat/completions format if video endpoint doesn't exist
-        log(`Video endpoint not available, trying chat/completions format...`, 'warn', { verbose: true });
-        const chatBody = {
-            model: modelId,
-            messages: [
-                {
-                    role: 'user',
-                    content: `Generate a video: ${prompt}. Aspect ratio: ${aspectRatio}, Size: ${dimensions.width}x${dimensions.height}`
-                }
-            ]
-        };
-        if (styleImageBase64) {
-            chatBody.messages[0].content = [
-                { type: 'text', text: `Generate a video: ${prompt}. Aspect ratio: ${aspectRatio}` },
-                { type: 'image_url', image_url: { url: `data:image/png;base64,${styleImageBase64}` } }
-            ];
-        }
-        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': window.location.origin,
-                'X-Title': 'Director\'s Cut - AI Music Video Suite'
-            },
-            body: JSON.stringify(chatBody)
-        });
-    }
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        log(`OpenRouter API error: ${errorText}`, 'error');
-        throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
-    }
-
-    const result = await response.json();
-    
-    // Handle different response formats from OpenRouter
-    // Some models return video URLs directly, others return task IDs for polling
-    if (result.choices && result.choices[0] && result.choices[0].message) {
-        const message = result.choices[0].message;
-        
-        // Check if response contains a video URL
-        if (message.content) {
-            // Try to extract video URL from response
-            const urlMatch = message.content.match(/https?:\/\/[^\s]+\.(mp4|webm|mov)/i);
-            if (urlMatch) {
-                const videoUrl = urlMatch[0];
-                log(`OpenRouter video URL received: ${videoUrl}`, 'success');
-                
-                // Download video and convert to blob URL
-                log(`Downloading video from OpenRouter...`, 'info');
-                const videoRes = await fetch(videoUrl);
-                if (!videoRes.ok) {
-                    throw new Error(`Failed to download video: ${videoRes.status}`);
-                }
-                const blob = await videoRes.blob();
-                const blobUrl = URL.createObjectURL(blob);
-                
-                log(`OpenRouter video generation complete!`, 'success');
-                return { videoUrl: blobUrl };
-            }
-        }
-        
-        // Check for task ID in response (for async models)
-        if (result.id || result.task_id) {
-            const taskId = result.id || result.task_id;
-            log(`OpenRouter task created: ${taskId}`, 'success');
-            log(`Polling for completion...`, 'info');
-            
-            // Poll for completion
-            return await pollOpenRouterTask(apiKey, taskId, modelId);
-        }
-    }
-
-    // If we get here, the response format is unexpected
-    log(`Unexpected OpenRouter response format: ${JSON.stringify(result)}`, 'warn');
-    throw new Error('OpenRouter returned an unexpected response format. Please check the model supports video generation.');
-}
-
-async function pollOpenRouterTask(
-    apiKey: string,
-    taskId: string,
-    modelId: string
-): Promise<OpenRouterVideoResult> {
-    let pollCount = 0;
-    const maxPolls = 120; // 10 minutes max (5s intervals)
-    
-    while (pollCount < maxPolls) {
-        pollCount++;
-        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
-
-        // Poll using OpenRouter's status endpoint (if available)
-        // Otherwise, try to get status from the original response
-        const statusResponse = await fetch(`https://openrouter.ai/api/v1/tasks/${taskId}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`
-            }
-        });
-
-        if (!statusResponse.ok) {
-            // If status endpoint doesn't exist, try alternative polling method
-            log(`Poll #${pollCount}: Status endpoint not available, trying alternative method...`, 'warn', { verbose: true });
-            // For now, we'll throw an error and let the user know
-            throw new Error('OpenRouter task polling not yet implemented for this model. Please check OpenRouter documentation for async video generation.');
-        }
-
-        const statusResult = await statusResponse.json();
-        const status = statusResult.status || statusResult.state;
-
-        log(`Poll #${pollCount}: status=${status}`, 'info', { verbose: true });
-
-        if (status === 'completed' || status === 'succeeded' || status === 'done') {
-            const videoUrl = statusResult.output?.video_url || statusResult.video_url || statusResult.output;
-            if (!videoUrl) {
-                throw new Error('OpenRouter task succeeded but no video URL returned');
-            }
-            
-            // Download video and convert to blob URL
-            log(`Downloading video from OpenRouter...`, 'info');
-            const videoRes = await fetch(videoUrl);
-            if (!videoRes.ok) {
-                throw new Error(`Failed to download video: ${videoRes.status}`);
-            }
-            const blob = await videoRes.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            
-            log(`OpenRouter video generation complete!`, 'success');
-            return { videoUrl: blobUrl, taskId };
-        } else if (status === 'failed' || status === 'error') {
-            const errorMsg = statusResult.error || statusResult.message || 'Unknown error';
-            throw new Error(`OpenRouter video generation failed: ${errorMsg}`);
-        }
-        // Continue polling for 'pending', 'processing', 'running' states
-    }
-
-    throw new Error('OpenRouter video generation timed out after 10 minutes');
-}
-
-// --- VEO VIDEO GENERATION (Legacy/Fallback) ---
+// --- VEO VIDEO GENERATION ---
 
 async function generateVideoWithVeo(
     ai: any,
+    modelId: string,
     prompt: string,
     aspectRatio: string,
     styleImage?: { imageBytes: string; mimeType: string }
-): Promise<{ uri: string }> {
+): Promise<{ uri: string; blobUrl: string }> {
     const videoConfig: any = {
         numberOfVideos: 1,
-        resolution: '1080p',
         aspectRatio
     };
 
-    log(`Sending prompt to Veo...`, 'info', {
-        context: { promptPreview: `${prompt.substring(0, 120)}${prompt.length > 120 ? '...' : ''}` },
+    log(`Sending prompt to Veo (${modelId})...`, 'info', {
+        context: { model: modelId, promptPreview: `${prompt.substring(0, 120)}${prompt.length > 120 ? '...' : ''}` },
         verbose: true
     });
 
@@ -1401,7 +1197,7 @@ async function generateVideoWithVeo(
     if (styleImage) {
         log(`Using reference image for Veo generation (${styleImage.mimeType})...`, 'info');
         veoOperation = await ai.models.generateVideos({
-            model: 'veo-3.1-generate-preview',
+            model: modelId,
             prompt: prompt,
             image: styleImage,
             config: videoConfig
@@ -1409,7 +1205,7 @@ async function generateVideoWithVeo(
     } else {
         log(`No reference image - text-only Veo generation...`, 'info');
         veoOperation = await ai.models.generateVideos({
-            model: 'veo-3.1-generate-preview',
+            model: modelId,
             prompt: prompt,
             config: videoConfig
         });
@@ -1430,7 +1226,20 @@ async function generateVideoWithVeo(
     log(`Veo polling complete after ${pollCount} polls.`, 'success');
 
     if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
-        return { uri: veoOperation.response.generatedVideos[0].video.uri };
+        const videoUri = veoOperation.response.generatedVideos[0].video.uri;
+        
+        // Download video and create blob URL
+        log(`Downloading video from Veo...`, 'info');
+        const downloadUrl = appendApiKey(videoUri);
+        const videoRes = await fetch(downloadUrl);
+        if (!videoRes.ok) {
+            throw new Error(`Failed to download video: ${videoRes.status}`);
+        }
+        const blob = await videoRes.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        
+        log(`Veo video generation complete!`, 'success');
+        return { uri: videoUri, blobUrl };
     }
 
     throw new Error('Veo returned no video (Possible Safety Block)');
@@ -1452,18 +1261,11 @@ async function generateVideoWithVeo(
     }
 
     const videoModel = state.videoModel;
-    const isOpenRouter = true; // All video models now use OpenRouter
 
-    // Check OpenRouter API key
-    if (!process.env.OPENROUTER_API_KEY) {
-        if (window.aistudio?.openSelectKey) {
-            log("Requesting OpenRouter API Key selection...", "warn");
-            await window.aistudio.openSelectKey();
-        } else {
-            alert("OpenRouter API Key missing. Please configure OPENROUTER_API_KEY in your .env.local file.");
-            throw new Error("OpenRouter API Key missing");
-        }
-    }
+    // Check Gemini API key
+    await checkApiKey();
+
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     mutateScene(sceneId, scene => {
         scene.status = 'generating';
@@ -1507,10 +1309,7 @@ async function generateVideoWithVeo(
         const aspectRatio = latestState.aspectRatio;
 
         try {
-            let videoUrl: string;
-            let videoUri: string | undefined;
-
-            // Use OpenRouter for video generation
+            // Use Veo for video generation
             log(`Video Config prepared`, "info", {
                 context: {
                     model: videoModel,
@@ -1521,22 +1320,21 @@ async function generateVideoWithVeo(
                 verbose: true
             });
 
-            const result = await generateVideoWithOpenRouter(
+            const result = await generateVideoWithVeo(
+                ai,
                 videoModel,
                 currentPrompt,
                 aspectRatio,
-                styleImage?.imageBytes
+                styleImage
             );
 
-            log(`OpenRouter video URL received`, "success");
-            videoUrl = result.videoUrl;
-            videoUri = result.videoUrl; // Store the blob URL
+            log(`Veo video received`, "success");
 
             // Success - update scene
             mutateScene(sceneId, scene => {
                 scene.status = 'done';
-                scene.videoUri = videoUri;
-                scene.videoUrl = videoUrl;
+                scene.videoUri = result.uri;
+                scene.videoUrl = result.blobUrl;
                 scene.visualPrompt = currentPrompt;
             });
 
@@ -1566,7 +1364,8 @@ async function generateVideoWithVeo(
             const isRetryableError = e.message.includes("Safety") || 
                                      e.message.includes("no video") ||
                                      e.message.includes("failed") ||
-                                     e.message.includes("FAILED");
+                                     e.message.includes("FAILED") ||
+                                     e.message.includes("blocked");
 
             if (attempts < maxAttempts && isRetryableError) {
                 const category = detectSafetyCategory(e.message);
@@ -1589,7 +1388,6 @@ async function generateVideoWithVeo(
                         styleImage = undefined;
                     }
 
-                    // For Qwen, we rely more on prompt sanitization
                     const newPrompt = await sanitizePrompt(currentPrompt);
                     log(`Sanitized Prompt updated.`, "info", {
                         context: {
