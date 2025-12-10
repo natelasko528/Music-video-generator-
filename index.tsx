@@ -631,7 +631,7 @@ async function handleVocalRemoval() {
     } catch (err) {
         console.error(err);
         updateVocalRemovalStatus(err instanceof Error ? err.message : 'Failed to process audio.', 'error');
-        log('Vocal reduction failed.', 'error', { err: String(err) });
+        log('Vocal reduction failed.', 'error', { context: { error: String(err) } });
     } finally {
         vocalRemovalBtn.disabled = false;
         vocalRemovalBtn.textContent = 'Mute explicit lyrics (keep the music)';
