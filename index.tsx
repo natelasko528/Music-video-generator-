@@ -5,39 +5,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 import { GoogleGenAI, Type } from '@google/genai';
-
-// --- Types & Interfaces ---
-
-interface Scene {
-    id: string;
-    startTime: number;
-    endTime: number;
-    description: string;
-    visualPrompt: string; // The optimized prompt for Veo
-    status: 'pending' | 'generating' | 'done' | 'error' | 'sanitizing';
-    videoUri?: string;
-    videoUrl?: string; // Blob URL
-    errorMsg?: string;
-}
-
-const PLANNER_MODELS = {
-    default: 'gemini-3-pro-preview',
-    fast: 'gemini-2.0-nano-banana'
-} as const;
-
-type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
-
-interface ProjectState {
-    scenes: Scene[];
-    lyrics: string;
-    clipLength: number;
-    aspectRatio: string;
-    styleImageBase64: string;
-    styleImageMime: string;
-    audioDuration: number;
-    transitionType: 'cut' | 'crossfade' | 'fadeblack';
-    plannerModel: PlannerModelId;
-}
+import {
+    getProjectState,
+    subscribeToProjectState,
+    updateProjectState,
+    resetProjectState,
+    describePlannerModel,
+    validatePlannerModel,
+    PLANNER_MODELS,
+    type PlannerModelId,
+    type ProjectState,
+    type Scene
+} from './state/store';
 
 // --- Globals ---
 
@@ -51,18 +30,6 @@ declare global {
         renderSingleScene?: (id: string) => Promise<void>;
     }
 }
-
-let projectState: ProjectState = {
-    scenes: [],
-    lyrics: '',
-    clipLength: 5,
-    aspectRatio: '16:9',
-    styleImageBase64: '',
-    styleImageMime: '',
-    audioDuration: 0,
-    transitionType: 'cut',
-    plannerModel: PLANNER_MODELS.default
-};
 
 let audioBlobUrl: string | null = null;
 let instrumentalBlobUrl: string | null = null;
@@ -109,6 +76,11 @@ const saveStatus = document.getElementById('save-status') as HTMLElement;
 
 const debugOutput = document.getElementById('debug-output') as HTMLDivElement;
 const clearConsoleBtn = document.getElementById('clear-console') as HTMLButtonElement;
+
+const tabButtons = Array.from(document.querySelectorAll('[data-tab]')) as HTMLButtonElement[];
+const mobilePanels = Array.from(document.querySelectorAll('.mobile-panel')) as HTMLDivElement[];
+const aspectButtons = Array.from(document.querySelectorAll('.aspect-btn')) as HTMLButtonElement[];
+const clipButtons = Array.from(document.querySelectorAll('.clip-btn')) as HTMLButtonElement[];
 
 // --- Logging System ---
 
@@ -332,47 +304,258 @@ async function checkApiKey() {
 
 // --- State Management ---
 
-function loadState() {
-    const saved = localStorage.getItem('music-video-project');
-    if (saved) {
-        try {
-            const parsed = JSON.parse(saved);
-            projectState = { ...projectState, ...parsed };
+let runtimeState: ProjectState = getProjectState();
+const hydratingSceneIds = new Set<string>();
+let saveStatusTimeout: number | null = null;
 
-            projectState.plannerModel = validatePlannerModel(projectState.plannerModel);
+syncStateToUI(runtimeState);
+subscribeToProjectState((next, prev) => {
+    runtimeState = next;
+    syncStateToUI(next, prev);
+});
 
-            // Restore UI
-            promptInput.value = projectState.lyrics;
-            aspectRatioSelect.value = projectState.aspectRatio;
-            clipLengthSelect.value = projectState.clipLength.toString();
-            transitionSelect.value = projectState.transitionType;
-            plannerModelSelect.value = projectState.plannerModel;
-
-            if (projectState.styleImageBase64) {
-                stylePreview.src = `data:${projectState.styleImageMime};base64,${projectState.styleImageBase64}`;
-                stylePreview.classList.remove('hidden');
-            }
-
-            renderSceneList();
-            log("Project state restored from local storage.", "system");
-        } catch (e) {
-            console.error("Failed to load state", e);
-            log("Failed to load saved state.", "error");
-        }
+function syncStateToUI(state: ProjectState, prev?: ProjectState) {
+    syncPromptField(state);
+    syncStylePreview(state);
+    syncAspectRatioControls(state);
+    syncClipLengthControls(state);
+    syncTransitionControl(state);
+    syncPlannerModelControl(state);
+    syncAudioDurationLabels(state);
+    syncActiveTabUI(state.activeTab);
+    updateSaveStatusDisplay(state.lastSavedAt, prev?.lastSavedAt ?? null);
+    renderSceneList(state);
+    ensureSceneHydration(state);
+    if (prev && prev.activeTab !== state.activeTab) {
+        log(`Switched to ${capitalize(state.activeTab)} view.`, 'system');
     }
-
-    plannerModelSelect.value = projectState.plannerModel;
 }
 
-function saveState() {
-    localStorage.setItem('music-video-project', JSON.stringify({
-        ...projectState,
-        scenes: projectState.scenes.map(s => ({ ...s, videoUrl: undefined })) // Don't save blob URLs
-    }));
+function capitalize(value: string): string {
+    if (!value) return '';
+    return value.charAt(0).toUpperCase() + value.slice(1);
+}
 
-    saveStatus.textContent = "Saved " + new Date().toLocaleTimeString();
-    saveStatus.classList.add('text-green-500');
-    setTimeout(() => saveStatus.classList.remove('text-green-500'), 1000);
+function syncPromptField(state: ProjectState) {
+    if (!promptInput) return;
+    if (document.activeElement === promptInput) return;
+    if (promptInput.value !== state.lyrics) {
+        promptInput.value = state.lyrics;
+    }
+}
+
+function syncStylePreview(state: ProjectState) {
+    if (!stylePreview) return;
+    if (state.styleImageBase64) {
+        const nextSrc = `data:${state.styleImageMime};base64,${state.styleImageBase64}`;
+        if (stylePreview.src !== nextSrc) {
+            stylePreview.src = nextSrc;
+        }
+        stylePreview.classList.remove('hidden');
+    } else {
+        stylePreview.classList.add('hidden');
+        stylePreview.removeAttribute('src');
+    }
+}
+
+function syncAspectRatioControls(state: ProjectState) {
+    if (aspectRatioSelect && aspectRatioSelect.value !== state.aspectRatio) {
+        aspectRatioSelect.value = state.aspectRatio;
+    }
+    aspectButtons.forEach(btn => {
+        const isActive = btn.dataset.value === state.aspectRatio;
+        btn.classList.toggle('active', isActive);
+    });
+}
+
+function syncClipLengthControls(state: ProjectState) {
+    if (clipLengthSelect) {
+        const desired = state.clipLength.toString();
+        if (clipLengthSelect.value !== desired) {
+            clipLengthSelect.value = desired;
+        }
+    }
+    clipButtons.forEach(btn => {
+        const isActive = Number(btn.dataset.value) === state.clipLength;
+        btn.classList.toggle('active', isActive);
+    });
+}
+
+function syncTransitionControl(state: ProjectState) {
+    if (transitionSelect && transitionSelect.value !== state.transitionType) {
+        transitionSelect.value = state.transitionType;
+    }
+}
+
+function syncPlannerModelControl(state: ProjectState) {
+    if (plannerModelSelect && plannerModelSelect.value !== state.plannerModel) {
+        plannerModelSelect.value = state.plannerModel;
+    }
+}
+
+function syncAudioDurationLabels(state: ProjectState) {
+    const formatted = formatTime(state.audioDuration || 0);
+    if (audioDurationEl) {
+        audioDurationEl.textContent = formatted;
+    }
+    if (totalTimeEl) {
+        totalTimeEl.textContent = formatted;
+    }
+}
+
+function syncActiveTabUI(activeTab: ProjectState['activeTab']) {
+    tabButtons.forEach(btn => {
+        const isActive = btn.dataset.tab === activeTab;
+        btn.classList.toggle('active', isActive);
+    });
+
+    mobilePanels.forEach(panel => {
+        const panelId = panel.id.replace('panel-', '');
+        if (panelId === activeTab) {
+            panel.classList.remove('hidden');
+            panel.classList.add('flex', 'flex-col');
+        } else {
+            panel.classList.add('hidden');
+            panel.classList.remove('flex', 'flex-col');
+        }
+    });
+}
+
+function updateSaveStatusDisplay(timestamp: number | null, previousTimestamp: number | null) {
+    if (!saveStatus) return;
+
+    if (!timestamp) {
+        saveStatus.classList.add('hidden');
+        return;
+    }
+
+    saveStatus.classList.remove('hidden');
+    saveStatus.textContent = `Saved ${new Date(timestamp).toLocaleTimeString()}`;
+
+    if (timestamp !== previousTimestamp) {
+        saveStatus.classList.add('text-green-500');
+        if (saveStatusTimeout) {
+            window.clearTimeout(saveStatusTimeout);
+        }
+        saveStatusTimeout = window.setTimeout(() => {
+            saveStatus?.classList.remove('text-green-500');
+        }, 1000);
+    }
+}
+
+function ensureSceneHydration(state: ProjectState) {
+    state.scenes.forEach(scene => {
+        if (scene.videoUri && !scene.videoUrl && !hydratingSceneIds.has(scene.id)) {
+            hydrateSceneMedia(scene);
+        }
+    });
+}
+
+async function hydrateSceneMedia(scene: Scene) {
+    if (!scene.videoUri || !process.env.API_KEY) return;
+    hydratingSceneIds.add(scene.id);
+    try {
+        log(`Restoring preview for ${scene.id}...`, 'info', { verbose: true });
+        const downloadUrl = appendApiKey(scene.videoUri);
+        const res = await fetch(downloadUrl);
+        if (!res.ok) {
+            throw new Error(`Failed to hydrate video (${res.status})`);
+        }
+        const blob = await res.blob();
+        if (blob.size === 0) {
+            throw new Error('Hydrated video is empty');
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        mutateScene(scene.id, target => {
+            target.videoUrl = blobUrl;
+        }, { persist: false });
+    } catch (err) {
+        log(`Failed to restore scene ${scene.id}`, 'warn', {
+            context: { error: err instanceof Error ? err.message : String(err) },
+            verbose: true
+        });
+    } finally {
+        hydratingSceneIds.delete(scene.id);
+    }
+}
+
+function appendApiKey(uri: string): string {
+    if (!process.env.API_KEY) return uri;
+    const separator = uri.includes('?') ? '&' : '?';
+    if (uri.includes('key=')) return uri;
+    return `${uri}${separator}key=${process.env.API_KEY}`;
+}
+
+function setActiveTab(tab: ProjectState['activeTab']) {
+    updateProjectState({ activeTab: tab });
+}
+
+tabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tab = (btn.dataset.tab as ProjectState['activeTab']) || 'setup';
+        if (tab !== runtimeState.activeTab) {
+            setActiveTab(tab);
+        }
+    });
+});
+
+aspectButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const value = btn.dataset.value || '16:9';
+        if (value !== runtimeState.aspectRatio) {
+            updateProjectState({ aspectRatio: value });
+        }
+    });
+});
+
+clipButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const value = Number(btn.dataset.value || runtimeState.clipLength);
+        if (value !== runtimeState.clipLength) {
+            updateProjectState({ clipLength: value });
+        }
+    });
+});
+
+function normalizePlannerScenes(scenes: any[], state: ProjectState): Scene[] {
+    return scenes.map((scene, index) => normalizePlannerScene(scene, index, state));
+}
+
+function normalizePlannerScene(scene: any, index: number, state: ProjectState): Scene {
+    const fallbackStart = index * state.clipLength;
+    const fallbackEnd = fallbackStart + state.clipLength;
+
+    const start = isFiniteNumber(scene.startTime) ? scene.startTime : fallbackStart;
+    const endCandidate = isFiniteNumber(scene.endTime) ? scene.endTime : fallbackEnd;
+
+    const clampedStart = clampNumber(start, 0, state.audioDuration);
+    const clampedEnd = clampNumber(Math.max(clampedStart, endCandidate), 0, state.audioDuration);
+
+    return {
+        id: typeof scene.id === 'string' ? scene.id : `scene-${index}`,
+        startTime: clampedStart,
+        endTime: clampedEnd,
+        description: scene.description || `Scene ${index + 1}`,
+        visualPrompt: scene.visualPrompt || '',
+        status: 'pending'
+    };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+}
+
+function isFiniteNumber(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+function mutateScene(sceneId: string, mutator: (scene: Scene) => void, options?: { persist?: boolean }) {
+    updateProjectState(draft => {
+        const target = draft.scenes.find(scene => scene.id === sceneId);
+        if (target) {
+            mutator(target);
+        }
+    }, options);
 }
 
 // --- Audio Handling ---
@@ -397,10 +580,7 @@ audioInput.addEventListener('change', (e) => {
 });
 
 audioEl.addEventListener('loadedmetadata', () => {
-    projectState.audioDuration = audioEl.duration;
-    audioDurationEl.textContent = formatTime(projectState.audioDuration);
-    totalTimeEl.textContent = formatTime(projectState.audioDuration);
-    saveState();
+    updateProjectState({ audioDuration: audioEl.duration });
 });
 
 async function createInstrumentalBuffer(buffer: AudioBuffer): Promise<AudioBuffer> {
@@ -482,29 +662,37 @@ if (vocalRemovalBtn) {
 styleInput.addEventListener('change', async (e) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (file) {
-        projectState.styleImageMime = file.type;
-        projectState.styleImageBase64 = await blobToBase64(file);
+        const base64 = await blobToBase64(file);
+        updateProjectState({
+            styleImageMime: file.type,
+            styleImageBase64: base64
+        });
         stylePreview.src = URL.createObjectURL(file);
         stylePreview.classList.remove('hidden');
-        saveState();
         log("Style reference image updated.", "info");
+    } else {
+        updateProjectState({
+            styleImageMime: '',
+            styleImageBase64: ''
+        });
     }
 });
 
 aspectRatioSelect.addEventListener('change', () => {
-    projectState.aspectRatio = aspectRatioSelect.value;
-    saveState();
+    updateProjectState({ aspectRatio: aspectRatioSelect.value });
 });
 
 clipLengthSelect.addEventListener('change', () => {
-    projectState.clipLength = parseInt(clipLengthSelect.value);
-    saveState();
+    const nextLength = parseInt(clipLengthSelect.value, 10);
+    if (!Number.isNaN(nextLength)) {
+        updateProjectState({ clipLength: nextLength });
+    }
 });
 
 transitionSelect.addEventListener('change', () => {
-    projectState.transitionType = transitionSelect.value as any;
-    log(`Transition effect changed to: ${projectState.transitionType.toUpperCase()}`, 'info');
-    saveState();
+    const nextTransition = transitionSelect.value as ProjectState['transitionType'];
+    updateProjectState({ transitionType: nextTransition });
+    log(`Transition effect changed to: ${nextTransition.toUpperCase()}`, 'info');
 });
 
 plannerModelSelect.addEventListener('change', () => {
@@ -512,20 +700,19 @@ plannerModelSelect.addEventListener('change', () => {
     if (validatedModel !== plannerModelSelect.value) {
         log('Invalid planner model selection detected. Reverting to default.', 'warn');
     }
-    projectState.plannerModel = validatedModel;
     plannerModelSelect.value = validatedModel;
+    updateProjectState({ plannerModel: validatedModel });
     log(`Planner model set to: ${describePlannerModel(validatedModel)}`, 'info');
-    saveState();
 });
 
 promptInput.addEventListener('input', () => {
-    projectState.lyrics = promptInput.value;
-    saveState();
+    updateProjectState({ lyrics: promptInput.value });
 });
 
 clearProjectBtn.addEventListener('click', () => {
     if (confirm("Are you sure? This will delete all generated scenes.")) {
         localStorage.removeItem('music-video-project');
+        resetProjectState();
         location.reload();
     }
 });
@@ -534,26 +721,29 @@ clearProjectBtn.addEventListener('click', () => {
 // --- PLANNER LOGIC (Gemini 3.0) ---
 
 planButton.addEventListener('click', async () => {
-    if (!projectState.audioDuration || projectState.audioDuration === 0) {
+    let state = getProjectState();
+
+    if (!state.audioDuration || state.audioDuration === 0) {
         alert("Please upload an audio track first.");
         log("Planning aborted: No audio track.", "warn");
         return;
     }
 
-    if (!promptInput.value.trim()) {
+    if (!state.lyrics.trim()) {
         alert("Please enter lyrics or a vibe description.");
         return;
     }
 
     await checkApiKey();
-    const normalizedPlannerModel = validatePlannerModel(projectState.plannerModel);
-    if (normalizedPlannerModel !== projectState.plannerModel) {
+    const normalizedPlannerModel = validatePlannerModel(state.plannerModel);
+    if (normalizedPlannerModel !== state.plannerModel) {
         log('Unknown planner model found in state. Resetting to default.', 'warn');
-        projectState.plannerModel = normalizedPlannerModel;
-        saveState();
+        updateProjectState({ plannerModel: normalizedPlannerModel });
+        state = getProjectState();
     }
-    plannerModelSelect.value = projectState.plannerModel;
-    log(`Planner model selected: ${describePlannerModel(projectState.plannerModel)} (${projectState.plannerModel})`, 'system');
+    plannerModelSelect.value = state.plannerModel;
+    log(`Planner model selected: ${describePlannerModel(state.plannerModel)} (${state.plannerModel})`, 'system');
+
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
     planButton.disabled = true;
@@ -563,25 +753,24 @@ planButton.addEventListener('click', async () => {
         context: {
             model: 'gemini-3-pro-preview',
             payload: {
-                audioDuration: projectState.audioDuration,
-                clipLength: projectState.clipLength,
-                aspectRatio: projectState.aspectRatio,
-                lyricChars: projectState.lyrics.length
+                audioDuration: state.audioDuration,
+                clipLength: state.clipLength,
+                aspectRatio: state.aspectRatio,
+                lyricChars: state.lyrics.length
             }
         },
         verbose: true
     });
 
-    const numClips = Math.ceil(projectState.audioDuration / projectState.clipLength);
-
+    const numClips = Math.max(1, Math.ceil(state.audioDuration / state.clipLength));
     const systemInstruction = `
     You are a professional Music Video Director creating content for AI video generation.
-    TASK: Create a visual storyboard for a song that is ${Math.round(projectState.audioDuration)} seconds long.
-    The video MUST be broken down into exactly ${numClips} sequential scenes, each approx ${projectState.clipLength} seconds.
+    TASK: Create a visual storyboard for a song that is ${Math.round(state.audioDuration)} seconds long.
+    The video MUST be broken down into exactly ${numClips} sequential scenes, each approx ${state.clipLength} seconds.
 
     INPUT CONTEXT:
-    Lyrics/Vibe: "${projectState.lyrics}"
-    Aspect Ratio: ${projectState.aspectRatio}
+    Lyrics/Vibe: "${state.lyrics}"
+    Aspect Ratio: ${state.aspectRatio}
 
     CRITICAL SAFETY REQUIREMENTS (Veo will reject prompts with any of these):
     - NO money, cash, bills, counting money, or wealth displays
@@ -616,7 +805,7 @@ planButton.addEventListener('click', async () => {
             model: modelId,
             contents: { parts: [{ text: "Plan the music video storyboard." }] },
             config: {
-                systemInstruction: systemInstruction,
+                systemInstruction,
                 responseMimeType: 'application/json',
                 responseSchema: {
                     type: Type.OBJECT,
@@ -642,45 +831,37 @@ planButton.addEventListener('click', async () => {
 
         let response;
         try {
-            response = await generateStoryboard(projectState.plannerModel);
-            log(`Planner response received from ${projectState.plannerModel}.`, 'success');
+            response = await generateStoryboard(state.plannerModel);
+            log(`Planner response received from ${state.plannerModel}.`, 'success');
         } catch (plannerError: any) {
-            if (projectState.plannerModel === PLANNER_MODELS.fast) {
+            if (state.plannerModel === PLANNER_MODELS.fast) {
                 log(`Fast planner unavailable (${plannerError?.message || 'error'}). Falling back to Gemini 3 Pro Preview.`, 'warn');
-                projectState.plannerModel = PLANNER_MODELS.default;
-                plannerModelSelect.value = projectState.plannerModel;
-                saveState();
-                response = await generateStoryboard(projectState.plannerModel);
-                log(`Planner response received from fallback model ${projectState.plannerModel}.`, 'success');
+                updateProjectState({ plannerModel: PLANNER_MODELS.default });
+                state = getProjectState();
+                plannerModelSelect.value = state.plannerModel;
+                response = await generateStoryboard(state.plannerModel);
+                log(`Planner response received from fallback model ${state.plannerModel}.`, 'success');
             } else {
                 throw plannerError;
             }
         }
 
         const plan = JSON.parse(response.text);
+        if (!plan?.scenes?.length) {
+            throw new Error('Planner returned no scenes.');
+        }
 
-        projectState.scenes = plan.scenes.map((s: any, index: number) => ({
-            id: `scene-${index}`,
-            startTime: index * projectState.clipLength,
-            endTime: Math.min((index + 1) * projectState.clipLength, projectState.audioDuration),
-            description: s.description || "Scene",
-            visualPrompt: s.visualPrompt,
-            status: 'pending'
-        }));
+        const normalizedScenes = normalizePlannerScenes(plan.scenes, state);
 
-        saveState();
-        renderSceneList();
-        const planningMs = Math.round(performance.now() - planningStart);
-        log(`Storyboard created with ${projectState.scenes.length} scenes.`, "success", {
-            context: { durationMs: planningMs }
+        updateProjectState(draft => {
+            draft.scenes = normalizedScenes;
+            draft.activeTab = 'timeline';
         });
 
-        // Auto-navigate to Timeline tab
-        const timelineTab = document.querySelector('[data-tab="timeline"]') as HTMLButtonElement;
-        if (timelineTab) {
-            timelineTab.click();
-            log("Switched to Timeline view.", "system");
-        }
+        const planningMs = Math.round(performance.now() - planningStart);
+        log(`Storyboard created with ${normalizedScenes.length} scenes.`, "success", {
+            context: { durationMs: planningMs }
+        });
 
     } catch (e) {
         console.error(e);
@@ -705,10 +886,10 @@ planButton.addEventListener('click', async () => {
 
 // --- RENDER UI ---
 
-function renderSceneList() {
+function renderSceneList(state: ProjectState) {
     sceneContainer.innerHTML = '';
 
-    if (projectState.scenes.length === 0) {
+    if (state.scenes.length === 0) {
         sceneContainer.innerHTML = `<div class="h-full flex flex-col items-center justify-center text-gray-700 border border-dashed border-gray-800 rounded-xl"><p class="text-sm">Timeline Empty</p></div>`;
         renderAllBtn.disabled = true;
         return;
@@ -716,7 +897,7 @@ function renderSceneList() {
 
     renderAllBtn.disabled = false;
 
-    projectState.scenes.forEach((scene, index) => {
+    state.scenes.forEach((scene, index) => {
         const div = document.createElement('div');
         div.className = `group flex gap-3 p-3 rounded-lg border bg-[#1a1a1a] hover:bg-[#202020] transition-colors ${scene.status === 'generating' ? 'border-blue-500 shadow-blue-900/20 shadow-lg' : scene.status === 'sanitizing' ? 'border-yellow-500' : 'border-gray-800'}`;
 
@@ -804,7 +985,7 @@ async function generateSafeReferenceImage(prompt: string): Promise<{ base64: str
             prompt: `Cinematic still, high quality, professional music video shot: ${prompt}`,
             config: {
                 numberOfImages: 1,
-                aspectRatio: projectState.aspectRatio === '9:16' ? '9:16' : '16:9'
+                aspectRatio: runtimeState.aspectRatio === '9:16' ? '9:16' : '16:9'
             }
         });
 
@@ -870,34 +1051,41 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
     const renderStart = performance.now();
 
-    const sceneIndex = projectState.scenes.findIndex(s => s.id === sceneId);
-    if (sceneIndex === -1) {
+    const findScene = () => {
+        const state = getProjectState();
+        const index = state.scenes.findIndex(s => s.id === sceneId);
+        return { state, index };
+    };
+
+    let { state, index } = findScene();
+    if (index === -1) {
         log(`ERROR: Scene ${sceneId} not found in project state.`, "error");
         return;
     }
 
-    // Update State
-    projectState.scenes[sceneIndex].status = 'generating';
-    projectState.scenes[sceneIndex].errorMsg = undefined;
-    renderSceneList();
+    mutateScene(sceneId, scene => {
+        scene.status = 'generating';
+        scene.errorMsg = undefined;
+    });
 
-    log(`========== RENDER START: Scene #${sceneIndex + 1} ==========`, "system");
+    ({ state, index } = findScene());
+    const baseScene = state.scenes[index];
+
+    log(`========== RENDER START: Scene #${index + 1} ==========`, "system");
     log(`Scene ID: ${sceneId}`, "info");
 
-    let currentPrompt = projectState.scenes[sceneIndex].visualPrompt;
+    let currentPrompt = baseScene.visualPrompt;
     log(`Original Prompt: "${currentPrompt.substring(0, 100)}..."`, "info");
 
     let attempts = 0;
     const maxAttempts = 3;
 
-    // Check if we have a global style image
-    let styleImage = projectState.styleImageBase64 ? {
-        imageBytes: projectState.styleImageBase64,
-        mimeType: projectState.styleImageMime
+    let styleImage = state.styleImageBase64 ? {
+        imageBytes: state.styleImageBase64,
+        mimeType: state.styleImageMime
     } : undefined;
 
-    log(`Style Image Present: ${styleImage ? 'YES (' + projectState.styleImageMime + ')' : 'NO'}`, "info");
-    log(`Aspect Ratio: ${projectState.aspectRatio}`, "info");
+    log(`Style Image Present: ${styleImage ? 'YES (' + state.styleImageMime + ')' : 'NO'}`, "info");
 
     while (attempts < maxAttempts) {
         attempts++;
@@ -911,11 +1099,14 @@ Return ONLY the rewritten prompt text, nothing else.`,
             verbose: true
         });
 
+        const latestState = getProjectState();
+        const aspectRatio = latestState.aspectRatio;
+
         try {
             const videoConfig: any = {
                 numberOfVideos: 1,
                 resolution: '1080p',
-                aspectRatio: projectState.aspectRatio
+                aspectRatio
             };
 
             log(`Video Config prepared`, "info", {
@@ -936,7 +1127,6 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
             let veoOperation;
 
-            // LOGIC: Use style image if available (Global or Generated Safe Reference)
             if (styleImage) {
                 log(`Using reference image for generation (${styleImage.mimeType})...`, 'info');
                 veoOperation = await ai.models.generateVideos({
@@ -958,7 +1148,6 @@ Return ONLY the rewritten prompt text, nothing else.`,
             log(`Operation Name: ${veoOperation.name || 'N/A'}`, "info");
             log(`Polling for completion...`, "info");
 
-            // Poll with progress updates
             let pollCount = 0;
             while (!veoOperation.done) {
                 pollCount++;
@@ -969,19 +1158,12 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
             log(`Polling complete after ${pollCount} polls.`, "success");
 
-            // Debug: Log the full response structure
-            log(`Response exists: ${!!veoOperation.response}`, "info");
-            if (veoOperation.response) {
-                log(`GeneratedVideos count: ${veoOperation.response.generatedVideos?.length || 0}`, "info");
-            }
-
-            // Check Result
             if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
                 const uri = veoOperation.response.generatedVideos[0].video.uri;
                 log(`Video URI received: ${uri.substring(0, 50)}...`, "success");
                 log("Downloading video...", "info");
 
-                const res = await fetch(`${uri}&key=${process.env.API_KEY}`);
+                const res = await fetch(appendApiKey(uri));
                 log(`Download response: ${res.status} ${res.statusText}`, "info");
 
                 if (!res.ok) {
@@ -995,23 +1177,22 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 }
                 const blobUrl = URL.createObjectURL(blob);
 
-                projectState.scenes[sceneIndex].status = 'done';
-                projectState.scenes[sceneIndex].videoUri = uri;
-                projectState.scenes[sceneIndex].videoUrl = blobUrl;
-                projectState.scenes[sceneIndex].visualPrompt = currentPrompt;
+                mutateScene(sceneId, scene => {
+                    scene.status = 'done';
+                    scene.videoUri = uri;
+                    scene.videoUrl = blobUrl;
+                    scene.visualPrompt = currentPrompt;
+                });
 
-                saveState();
-                renderSceneList();
-                log(`========== RENDER SUCCESS: Scene #${sceneIndex + 1} ==========`, "success", {
+                log(`========== RENDER SUCCESS: Scene #${index + 1} ==========`, "success", {
                     context: {
                         durationMs: Math.round(performance.now() - attemptStart),
                         totalElapsedMs: Math.round(performance.now() - renderStart),
                         attempt: attempts
                     }
                 });
-                return; // Success, exit function
+                return;
             } else {
-                // Log what we got instead
                 log(`ERROR: No video URI in response.`, "error");
                 log(`Response object: ${JSON.stringify(veoOperation.response || {}).substring(0, 200)}`, "warn");
                 throw new Error("Veo returned no video (Possible Safety Block)");
@@ -1037,20 +1218,18 @@ Return ONLY the rewritten prompt text, nothing else.`,
                     }
                 });
 
-                projectState.scenes[sceneIndex].status = 'sanitizing';
-                renderSceneList();
+                mutateScene(sceneId, scene => {
+                    scene.status = 'sanitizing';
+                });
 
-                // STRATEGY SWITCHING
                 if (attempts === 1) {
                     log(`=== STRATEGY 1: Drop Image + Generate Safe Reference ===`, "system");
 
-                    // If we used a style image (whether User or Generated) and it failed, DROP IT.
                     if (styleImage) {
                         log("Dropping previous style image (potential safety trigger).", "warn");
                         styleImage = undefined;
                     }
 
-                    // Now try to generate a NEW safe reference image to guide Veo
                     log("Generating Safe Reference Image via Imagen...", "system");
                     const safeImage = await generateSafeReferenceImage(currentPrompt);
 
@@ -1061,7 +1240,6 @@ Return ONLY the rewritten prompt text, nothing else.`,
                         };
                         log("Safe reference image created successfully.", "success");
                     } else {
-                        // Fallback to just text sanitization if image gen fails
                         log("Image generation failed. Falling back to text sanitization...", "warn", { verbose: true });
                         const newPrompt = await sanitizePrompt(currentPrompt);
                         log(`Sanitized Prompt updated.`, "info", {
@@ -1074,40 +1252,41 @@ Return ONLY the rewritten prompt text, nothing else.`,
                         currentPrompt = newPrompt;
                     }
                 } else {
-                    // Strategy 2: Hard Sanitize (Last Resort)
                     log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system", { verbose: true });
                     currentPrompt = "Abstract cinematic music video scene, atmospheric lighting, moody, high quality, 4k";
                     log(`Hard-coded fallback prompt applied.`, "warn");
                 }
 
-                projectState.scenes[sceneIndex].status = 'generating';
-                renderSceneList();
-                // Loop continues
+                mutateScene(sceneId, scene => {
+                    scene.status = 'generating';
+                });
             } else {
-                projectState.scenes[sceneIndex].status = 'error';
-                projectState.scenes[sceneIndex].errorMsg = e.message || "Unknown error";
-                renderSceneList();
-                log(`========== RENDER FAILED: Scene #${sceneIndex + 1} ==========`, "error");
+                mutateScene(sceneId, scene => {
+                    scene.status = 'error';
+                    scene.errorMsg = e.message || "Unknown error";
+                });
+                log(`========== RENDER FAILED: Scene #${index + 1} ==========`, "error");
                 log(`Final Error: ${e.message}`, "error");
                 return;
             }
         }
     }
 
-    // If we exit the loop without returning, all attempts failed
     log(`All ${maxAttempts} attempts exhausted. Scene render failed.`, "error", {
         context: { totalElapsedMs: Math.round(performance.now() - renderStart) }
     });
-    projectState.scenes[sceneIndex].status = 'error';
-    projectState.scenes[sceneIndex].errorMsg = "Max retry attempts reached";
-    renderSceneList();
+    mutateScene(sceneId, scene => {
+        scene.status = 'error';
+        scene.errorMsg = "Max retry attempts reached";
+    });
 };
 
 renderAllBtn.addEventListener('click', async () => {
     if (!confirm("Start rendering all pending scenes? This may take time.")) return;
 
     log("Batch rendering initiated.", "system");
-    for (const scene of projectState.scenes) {
+    const scenesSnapshot = [...getProjectState().scenes];
+    for (const scene of scenesSnapshot) {
         if (scene.status !== 'done') {
             await (window as any).renderSingleScene(scene.id);
             // Brief pause
@@ -1122,7 +1301,7 @@ renderAllBtn.addEventListener('click', async () => {
 
 playPauseBtn.addEventListener('click', () => {
     if (audioEl.paused) {
-        if (!projectState.audioDuration) return alert("Upload audio first");
+        if (!runtimeState.audioDuration) return alert("Upload audio first");
 
         audioEl.play();
         iconPlay.classList.add('hidden');
@@ -1150,12 +1329,12 @@ function startPlaybackEngine() {
         currentTimeEl.textContent = formatTime(t);
 
         // Progress Bar
-        const pct = (t / projectState.audioDuration) * 100;
+        const pct = runtimeState.audioDuration ? (t / runtimeState.audioDuration) * 100 : 0;
         progressBar.style.width = `${pct}%`;
 
         // Determine Current Scene
-        const activeSceneIndex = projectState.scenes.findIndex(s => t >= s.startTime && t < s.endTime);
-        const activeScene = projectState.scenes[activeSceneIndex];
+        const activeSceneIndex = runtimeState.scenes.findIndex(s => t >= s.startTime && t < s.endTime);
+        const activeScene = runtimeState.scenes[activeSceneIndex];
 
         if (activeScene) {
             nowPlayingText.textContent = `Scene ${activeSceneIndex + 1}: ${activeScene.description}`;
@@ -1212,7 +1391,7 @@ function performTransition(newUrl: string, newSceneId: string) {
     }
 
     // 2. Execute Transition Effect
-    const effect = projectState.transitionType;
+    const effect = runtimeState.transitionType;
 
     if (effect === 'cut') {
         incomingLayer.style.transition = 'none';
@@ -1261,6 +1440,3 @@ function stopPlaybackEngine() {
     videoLayer1.pause();
     videoLayer2.pause();
 }
-
-// Initial Load
-loadState();

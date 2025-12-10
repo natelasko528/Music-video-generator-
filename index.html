@@ -429,53 +429,6 @@
 
     </div>
 
-    <!-- Tab Navigation Script -->
-    <script>
-      // Mobile tab navigation
-      document.querySelectorAll('[data-tab]').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const tab = btn.dataset.tab;
-
-          // Update tab buttons
-          document.querySelectorAll('.tab-btn, .bottom-nav-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.tab === tab);
-          });
-
-          // Update panels
-          document.querySelectorAll('.mobile-panel').forEach(panel => {
-            const panelId = panel.id.replace('panel-', '');
-            if (panelId === tab) {
-              panel.classList.remove('hidden');
-              panel.classList.add('flex', 'flex-col');
-            } else {
-              panel.classList.add('hidden');
-              panel.classList.remove('flex', 'flex-col');
-            }
-          });
-        });
-      });
-
-      // Aspect ratio buttons
-      document.querySelectorAll('.aspect-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.aspect-btn').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          document.getElementById('aspect-ratio').value = btn.dataset.value;
-          document.getElementById('aspect-ratio').dispatchEvent(new Event('change'));
-        });
-      });
-
-      // Clip length buttons
-      document.querySelectorAll('.clip-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-          document.querySelectorAll('.clip-btn').forEach(b => b.classList.remove('active'));
-          btn.classList.add('active');
-          document.getElementById('clip-length').value = btn.dataset.value;
-          document.getElementById('clip-length').dispatchEvent(new Event('change'));
-        });
-      });
-    </script>
-
     <script type="module" src="index.tsx"></script>
   </body>
 </html>
