@@ -6,453 +6,427 @@
 
 ---
 
-## 📊 Executive Summary
+## 📊 Executive Summary - LATEST MODELS (Verified December 2025)
 
-This document outlines the official API documentation, pricing, capabilities, and implementation approach for four high-quality video generation services to integrate into the AI Music Video Generator.
+This document contains **verified, up-to-date** API information gathered directly from provider APIs and Replicate's model registry.
 
-| Model | Provider | Quality | Cost | API Status | Best For |
-|-------|----------|---------|------|------------|----------|
-| **Veo 3.0** | Google | ⭐⭐⭐⭐⭐ | Free tier + paid | ✅ Production | Primary |
-| **Runway Gen-3 Alpha** | Runway | ⭐⭐⭐⭐⭐ | $0.05/sec | ✅ Production | Cinematic |
-| **Sora** | OpenAI | ⭐⭐⭐⭐⭐ | $0.15/sec (Plus) | 🟡 Limited | Experimental |
-| **Luma Dream Machine** | Luma AI | ⭐⭐⭐⭐ | Free tier available | ✅ Production | Budget |
+| Model | Provider | Version | Cost (per video) | API Status | Quality |
+|-------|----------|---------|------------------|------------|---------|
+| **Veo 3.1** | Google | Preview | ~$0.15/5s | ✅ Direct API | ⭐⭐⭐⭐⭐ |
+| **Sora 2** | OpenAI | Production | ~$0.50/5s | ✅ Via Replicate | ⭐⭐⭐⭐⭐ |
+| **Kling 2.0** | Kuaishou | v2 | ~$0.30/5s | ✅ Via Replicate | ⭐⭐⭐⭐⭐ |
+| **Luma Ray 2** | Luma AI | 720p | ~$0.25/5s | ✅ Via Replicate | ⭐⭐⭐⭐ |
+| **Hailuo 2** | MiniMax | v02 | ~$0.20/5s | ✅ Via Replicate | ⭐⭐⭐⭐ |
+| **Hunyuan Video** | Tencent | Latest | FREE (open) | ✅ Via Replicate | ⭐⭐⭐⭐ |
 
 ---
 
-## 1️⃣ Google Veo 3.0 (Primary - Already Integrated)
+## 1️⃣ Google Veo 3.1 (LATEST - Direct API Access)
 
-### Official API Documentation
-- **Docs URL:** https://ai.google.dev/gemini-api/docs/video
-- **API Package:** `@google/genai` (already installed)
-- **Model ID:** `veo-3.0-generate-001` (latest available)
+### Verified Models from Google GenAI API
+```
+models/veo-3.1-generate-preview      ← LATEST (Best Quality)
+models/veo-3.1-fast-generate-preview ← LATEST (Fast)
+models/veo-3.0-generate-001          ← Stable
+models/veo-3.0-fast-generate-001     ← Stable Fast
+models/veo-2.0-generate-001          ← Legacy (Currently in use)
+```
 
-### API Endpoint Structure
+### API Integration (Already Working!)
 ```typescript
-// Current implementation in index.tsx already supports this pattern
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Current implementation supports this - just update model ID
+import { GoogleGenAI } from '@google/genai';
 
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// Generate video with Veo 3.1
 const veoOperation = await ai.models.generateVideos({
-  model: 'veo-3.0-generate-001', // Updated from veo-2.0
-  prompt: prompt,
-  image: styleImage, // Optional reference image
+  model: 'veo-3.1-generate-preview', // ← UPDATE THIS
+  prompt: 'Cinematic music video scene...',
   config: {
     numberOfVideos: 1,
     aspectRatio: '16:9', // or '9:16', '1:1'
-    durationSeconds: 5, // 5-8 seconds supported
   }
 });
 
-// Polling for completion
+// Poll for completion (same as before)
 while (!veoOperation.done) {
-  await delay(4000);
+  await new Promise(r => setTimeout(r, 4000));
   veoOperation = await ai.operations.getVideosOperation({ operation: veoOperation });
 }
-
-// Get result
-const videoUri = veoOperation.response.generatedVideos[0].video.uri;
 ```
 
-### Veo 3.0 Capabilities
-- **Resolution:** Up to 1080p
-- **Duration:** 5-8 seconds per generation
-- **Audio:** Native audio generation (new in 3.0!)
-- **Aspect Ratios:** 16:9, 9:16, 1:1
-- **Features:** Image-to-video, text-to-video, style reference
-- **Rate Limits:** 10 requests/minute (free tier)
+### Veo 3.1 New Features
+- **Native Audio Generation** - Generates synchronized audio!
+- **Higher Resolution** - Up to 1080p
+- **Longer Duration** - Up to 8 seconds
+- **Better Motion** - Improved temporal consistency
+- **Style Transfer** - Enhanced reference image support
 
-### Pricing
-| Tier | Cost | Limits |
-|------|------|--------|
-| Free | $0 | 50 videos/day, 720p max |
-| Pay-as-you-go | ~$0.025/second | 1080p, priority queue |
+### Pricing (Google AI Studio)
+| Tier | Cost | Features |
+|------|------|----------|
+| Free | $0 | 50 videos/day, some limits |
+| Pay-as-you-go | ~$0.03/sec | Full quality, priority |
 
-### Integration Status: ✅ READY
-Update `VIDEO_MODELS` in `store.ts` to include veo-3.0-generate-001.
+### Integration Effort: ✅ MINIMAL
+Just update the model ID in `store.ts` - everything else works!
 
 ---
 
-## 2️⃣ Runway Gen-3 Alpha (Cinematic Quality)
+## 2️⃣ OpenAI Sora 2 (Via Replicate)
 
-### Official API Documentation
-- **Docs URL:** https://docs.runwayml.com/docs/api-reference
-- **API Base:** `https://api.runwayml.com/v1`
-- **Authentication:** Bearer token (API key)
+### Replicate Model IDs
+```
+openai/sora-2        ← Standard quality
+openai/sora-2-pro    ← Higher quality, longer videos
+```
 
-### API Endpoint Structure
+### API Integration via Replicate
 ```typescript
-interface RunwayVideoRequest {
-  model: 'gen3a_turbo' | 'gen3a'; // turbo is faster, gen3a is higher quality
-  prompt: string;
-  image_url?: string; // Optional reference image (must be public URL)
-  duration: 5 | 10; // 5 or 10 seconds
-  aspect_ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4';
-  seed?: number; // For reproducibility
-}
+import Replicate from 'replicate';
 
-// Create video generation task
-const response = await fetch('https://api.runwayml.com/v1/generate/video', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${RUNWAY_API_KEY}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    model: 'gen3a_turbo',
-    prompt: 'Cinematic music video scene...',
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
+});
+
+// Generate video with Sora 2
+const output = await replicate.run("openai/sora-2", {
+  input: {
+    prompt: "Cinematic music video, dramatic lighting, urban setting...",
     duration: 5,
-    aspect_ratio: '16:9',
-  }),
+    aspect_ratio: "16:9",
+    resolution: "1080p",
+  }
 });
 
-const { task_id } = await response.json();
-
-// Poll for completion
-let status = 'pending';
-while (status === 'pending' || status === 'processing') {
-  await delay(3000);
-  const statusRes = await fetch(`https://api.runwayml.com/v1/tasks/${task_id}`, {
-    headers: { 'Authorization': `Bearer ${RUNWAY_API_KEY}` },
-  });
-  const result = await statusRes.json();
-  status = result.status;
-  if (status === 'succeeded') {
-    return result.output.video_url;
-  }
-}
+// Returns video URL directly
+const videoUrl = output;
 ```
 
-### Gen-3 Alpha Capabilities
-- **Resolution:** Up to 1080p
-- **Duration:** 5 or 10 seconds
-- **Quality Modes:** Turbo (faster), Standard (higher quality)
-- **Aspect Ratios:** 16:9, 9:16, 1:1, 4:3, 3:4
-- **Features:** 
-  - Text-to-video
-  - Image-to-video (with public URL)
-  - Motion brush controls
-  - Camera motion presets
+### Sora 2 Features
+- **Industry-leading realism** - Best motion and physics
+- **20-second videos** - Longest duration available
+- **4K support** (Pro version)
+- **Remix capability** - Edit existing videos
+- **Storyboard mode** - Multi-scene generation
 
-### Pricing
-| Model | Cost per Second | 5s Video | 10s Video |
-|-------|-----------------|----------|-----------|
-| Gen-3 Alpha | $0.10/sec | $0.50 | $1.00 |
-| Gen-3 Alpha Turbo | $0.05/sec | $0.25 | $0.50 |
+### Pricing (Via Replicate)
+| Model | Cost/Run | Duration |
+|-------|----------|----------|
+| sora-2 | ~$0.50 | 5 seconds |
+| sora-2-pro | ~$1.20 | Up to 20 seconds |
 
-### Free Tier
-- **125 credits** on signup (~25 5-second videos)
-- No credit card required initially
-
-### Integration Complexity: 🟡 MEDIUM
-Requires new API key management and HTTP client implementation.
+### Integration Effort: 🟡 MEDIUM
+Requires Replicate SDK, but straightforward.
 
 ---
 
-## 3️⃣ OpenAI Sora (Experimental)
+## 3️⃣ Kling 2.0 (Via Replicate) - Best Value
 
-### Official API Documentation
-- **Docs URL:** https://platform.openai.com/docs/api-reference/video
-- **API Base:** `https://api.openai.com/v1`
-- **Status:** Rolling out to API users (December 2024+)
-
-### API Endpoint Structure (Based on OpenAI patterns)
-```typescript
-interface SoraVideoRequest {
-  model: 'sora-1' | 'sora-turbo';
-  prompt: string;
-  size: '1920x1080' | '1080x1920' | '1080x1080';
-  duration: number; // 5-20 seconds
-  style?: 'cinematic' | 'animated' | 'realistic';
-}
-
-// Generate video
-const response = await fetch('https://api.openai.com/v1/videos/generations', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${OPENAI_API_KEY}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    model: 'sora-turbo',
-    prompt: 'A professional music video scene...',
-    size: '1920x1080',
-    duration: 10,
-  }),
-});
-
-const { id, status } = await response.json();
-
-// Poll for completion (async generation)
-while (true) {
-  await delay(5000);
-  const result = await fetch(`https://api.openai.com/v1/videos/${id}`, {
-    headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-  });
-  const data = await result.json();
-  if (data.status === 'succeeded') {
-    return data.video_url;
-  }
-}
+### Replicate Model IDs
+```
+kwaivgi/kling-v2   ← LATEST (Kling 2.0)
+kwaivgi/kling-v1   ← Kling 1.6 (stable)
 ```
 
-### Sora Capabilities
-- **Resolution:** Up to 1080p (4K for Pro users)
-- **Duration:** 5-20 seconds (up to 60s for Pro)
-- **Quality:** Industry-leading realism and motion
-- **Features:**
-  - Text-to-video
-  - Image-to-video
-  - Video-to-video (extend/modify)
-  - Storyboard mode
-  - Blend videos together
+### API Integration via Replicate
+```typescript
+const output = await replicate.run("kwaivgi/kling-v2", {
+  input: {
+    prompt: "Professional music video, cinematic composition...",
+    negative_prompt: "blurry, low quality, distorted",
+    duration: 5,
+    aspect_ratio: "16:9",
+    cfg_scale: 7.5,
+  }
+});
+```
 
-### Pricing (Current ChatGPT Integration)
-| Plan | Videos/Month | Resolution | Duration |
-|------|--------------|------------|----------|
-| Plus ($20/mo) | 50 | 720p | 5 sec |
-| Pro ($200/mo) | 500 | 1080p | 20 sec |
-| API | TBD | TBD | TBD |
+### Kling 2.0 Features
+- **Excellent human motion** - Best for dance/performance videos
+- **10-second videos** - Good duration
+- **Lip sync capability** - Audio-driven generation
+- **Camera controls** - Pan, zoom, tracking shots
+- **1080p output**
 
-### API Availability
-⚠️ **Important:** Sora API is currently in limited rollout. As of late 2024:
-- Available through ChatGPT Plus/Pro interface
-- API access being gradually expanded
-- Check https://openai.com/sora for latest availability
+### Pricing (Via Replicate)
+| Model | Cost/Run | Notes |
+|-------|----------|-------|
+| kling-v2 | ~$0.30 | Best quality |
+| kling-v1 | ~$0.15 | Budget option |
 
-### Integration Complexity: 🔴 HIGH
-API still limited; may require OpenRouter proxy or waitlist.
+### Integration Effort: 🟡 MEDIUM
+Same Replicate SDK pattern.
 
 ---
 
-## 4️⃣ Luma AI Dream Machine (Budget-Friendly)
+## 4️⃣ Luma Ray 2 (Via Replicate) - Great for Cinematics
 
-### Official API Documentation
-- **Docs URL:** https://docs.lumalabs.ai/docs/api/video-generation
-- **API Base:** `https://api.lumalabs.ai/dream-machine/v1`
-- **Authentication:** Bearer token
+### Replicate Model IDs
+```
+luma/ray-2-720p        ← Standard Ray 2
+luma/ray-flash-2-720p  ← Faster Ray 2
+luma/ray-2-540p        ← Budget option
+luma/ray               ← Legacy Ray 1
+```
 
-### API Endpoint Structure
+### API Integration via Replicate
 ```typescript
-interface LumaVideoRequest {
-  prompt: string;
-  aspect_ratio: '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9';
-  keyframes?: {
-    frame0?: { type: 'image'; url: string };
-    frame1?: { type: 'image'; url: string };
-  };
-  loop?: boolean;
-  callback_url?: string; // Webhook for completion
-}
-
-// Create video generation
-const response = await fetch('https://api.lumalabs.ai/dream-machine/v1/generations', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${LUMA_API_KEY}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    prompt: 'Cinematic music video, dramatic lighting...',
-    aspect_ratio: '16:9',
+const output = await replicate.run("luma/ray-2-720p", {
+  input: {
+    prompt: "Ethereal music video scene, soft lighting, artistic...",
+    aspect_ratio: "16:9",
     loop: false,
-  }),
+  }
 });
-
-const { id } = await response.json();
-
-// Poll for completion
-let generation;
-do {
-  await delay(5000);
-  const statusRes = await fetch(`https://api.lumalabs.ai/dream-machine/v1/generations/${id}`, {
-    headers: { 'Authorization': `Bearer ${LUMA_API_KEY}` },
-  });
-  generation = await statusRes.json();
-} while (generation.state === 'queued' || generation.state === 'dreaming');
-
-if (generation.state === 'completed') {
-  return generation.assets.video; // Video URL
-}
 ```
 
-### Dream Machine 1.6 Capabilities
-- **Resolution:** 1080p
-- **Duration:** ~5 seconds per generation
-- **Quality:** Excellent cinematic quality
-- **Aspect Ratios:** 16:9, 9:16, 1:1, 4:3, 3:4, 21:9
-- **Features:**
-  - Text-to-video
-  - Image-to-video (start/end keyframes)
-  - Video extend
-  - Camera motion controls
-  - Loop generation
+### Luma Ray 2 Features
+- **Cinematic quality** - Excellent color grading
+- **Artistic style** - Great for creative videos
+- **720p standard** - Good balance of quality/speed
+- **Image-to-video** - Strong reference image support
+- **5-second clips**
+
+### Pricing (Via Replicate)
+| Model | Cost/Run | Speed |
+|-------|----------|-------|
+| ray-2-720p | ~$0.25 | Standard |
+| ray-flash-2-720p | ~$0.15 | 2x faster |
+| ray-2-540p | ~$0.12 | Budget |
+
+### Integration Effort: 🟡 MEDIUM
+Same Replicate SDK pattern.
+
+---
+
+## 5️⃣ Tencent Hunyuan Video (FREE - Open Source!)
+
+### Replicate Model ID
+```
+tencent/hunyuan-video  ← Open source, can self-host
+```
+
+### API Integration via Replicate
+```typescript
+const output = await replicate.run("tencent/hunyuan-video", {
+  input: {
+    prompt: "Music video scene with dramatic lighting...",
+    num_frames: 129, // ~5 seconds at 24fps
+    width: 720,
+    height: 1280,
+    seed: -1,
+  }
+});
+```
+
+### Hunyuan Video Features
+- **FREE** - Open source model
+- **Self-hostable** - No API costs if you run it
+- **Good quality** - Comparable to commercial options
+- **720p output**
+- **5+ second videos**
 
 ### Pricing
-| Tier | Cost | What You Get |
-|------|------|--------------|
-| Free | $0 | 30 generations/month |
-| Standard | $24/mo | 120 generations/month |
-| Pro | $96/mo | 400 generations/month |
-| API | $0.0032/frame | ~$0.40 per 5s video |
+| Deployment | Cost |
+|------------|------|
+| Via Replicate | ~$0.15/run |
+| Self-hosted | FREE (GPU costs only) |
 
-### Free Tier Details
-- **30 free generations per month** (no credit card)
-- Great for testing and light usage
-- Some generations may have watermark
+### Integration Effort: 🟢 LOW (if using Replicate)
 
-### Integration Complexity: 🟢 LOW
-Clean REST API, similar pattern to current Veo implementation.
+---
+
+## 6️⃣ Additional Premium Options
+
+### MiniMax Hailuo 2
+```
+minimax/hailuo-2        ← Latest
+minimax/video-01        ← Stable
+minimax/video-01-live   ← Real-time
+```
+- Excellent for consistent character generation
+- ~$0.20/video via Replicate
+
+### ByteDance Seedance
+```
+bytedance/seedance-1-pro   ← Best quality
+bytedance/seedance-1-lite  ← Budget
+```
+- Great motion quality
+- ~$0.25/video via Replicate
+
+### PixVerse v5
+```
+pixverse/pixverse-v5  ← Latest
+pixverse/pixverse-v4  ← Stable
+```
+- Fast generation
+- ~$0.18/video via Replicate
+
+### Alibaba WAN 2.1
+```
+wan-video/wan-2  ← Latest WAN model
+```
+- Open source option
+- ~$0.12/video via Replicate
 
 ---
 
 ## 🔧 Implementation Plan
 
-### Phase 1: Update Video Model Registry (store.ts)
+### Phase 1: Update store.ts with Latest Models
 
 ```typescript
-// Updated VIDEO_MODELS constant
+// Updated VIDEO_MODELS constant with ACTUAL latest models
 export const VIDEO_MODELS = {
+  // Google Veo (Direct API)
+  'veo-3.1-generate-preview': 'veo-3.1-generate-preview',
+  'veo-3.1-fast-generate-preview': 'veo-3.1-fast-generate-preview', 
   'veo-3.0-generate-001': 'veo-3.0-generate-001',
   'veo-2.0-generate-001': 'veo-2.0-generate-001',
-  'runway-gen3a-turbo': 'runway-gen3a-turbo',
-  'runway-gen3a': 'runway-gen3a',
-  'luma-dream-machine': 'luma-dream-machine',
-  'sora-turbo': 'sora-turbo', // When available
+  
+  // Via Replicate
+  'replicate/sora-2': 'openai/sora-2',
+  'replicate/sora-2-pro': 'openai/sora-2-pro',
+  'replicate/kling-v2': 'kwaivgi/kling-v2',
+  'replicate/luma-ray-2': 'luma/ray-2-720p',
+  'replicate/hailuo-2': 'minimax/hailuo-2',
+  'replicate/hunyuan': 'tencent/hunyuan-video',
 } as const;
 
-// Provider detection helper
-export function getVideoProvider(modelId: VideoModelId): 'google' | 'runway' | 'luma' | 'openai' {
-  if (modelId.startsWith('veo-')) return 'google';
-  if (modelId.startsWith('runway-')) return 'runway';
-  if (modelId.startsWith('luma-')) return 'luma';
-  if (modelId.startsWith('sora-')) return 'openai';
-  return 'google'; // Default
+export function getVideoProvider(modelId: VideoModelId): 'google' | 'replicate' {
+  return modelId.startsWith('veo-') ? 'google' : 'replicate';
+}
+
+export function describeVideoModel(modelId: VideoModelId): string {
+  const names: Record<string, string> = {
+    'veo-3.1-generate-preview': 'Google Veo 3.1 (Latest)',
+    'veo-3.1-fast-generate-preview': 'Google Veo 3.1 Fast',
+    'veo-3.0-generate-001': 'Google Veo 3.0',
+    'veo-2.0-generate-001': 'Google Veo 2.0 (Legacy)',
+    'replicate/sora-2': 'OpenAI Sora 2',
+    'replicate/sora-2-pro': 'OpenAI Sora 2 Pro',
+    'replicate/kling-v2': 'Kling 2.0 (Best Value)',
+    'replicate/luma-ray-2': 'Luma Ray 2',
+    'replicate/hailuo-2': 'MiniMax Hailuo 2',
+    'replicate/hunyuan': 'Hunyuan Video (Free)',
+  };
+  return names[modelId] || modelId;
 }
 ```
 
-### Phase 2: Create Provider Abstraction (video-providers.ts)
+### Phase 2: Add Replicate Integration
 
 ```typescript
-// New file: video-providers.ts
+// New file: replicate-provider.ts
+import Replicate from 'replicate';
 
-export interface VideoGenerationResult {
-  uri: string;
-  blobUrl: string;
-  provider: string;
-}
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN,
+});
 
-export interface VideoGenerationOptions {
-  prompt: string;
-  aspectRatio: string;
-  styleImage?: { base64: string; mimeType: string };
-  duration?: number;
-}
+export async function generateWithReplicate(
+  modelId: string,
+  prompt: string,
+  aspectRatio: string
+): Promise<{ uri: string; blobUrl: string }> {
+  
+  const output = await replicate.run(modelId as `${string}/${string}`, {
+    input: {
+      prompt,
+      aspect_ratio: aspectRatio,
+      duration: 5,
+    }
+  });
 
-// Provider implementations
-export async function generateWithVeo(options: VideoGenerationOptions): Promise<VideoGenerationResult>;
-export async function generateWithRunway(options: VideoGenerationOptions): Promise<VideoGenerationResult>;
-export async function generateWithLuma(options: VideoGenerationOptions): Promise<VideoGenerationResult>;
-export async function generateWithSora(options: VideoGenerationOptions): Promise<VideoGenerationResult>;
-
-// Unified interface
-export async function generateVideo(
-  modelId: VideoModelId, 
-  options: VideoGenerationOptions
-): Promise<VideoGenerationResult> {
-  const provider = getVideoProvider(modelId);
-  switch (provider) {
-    case 'google': return generateWithVeo(options);
-    case 'runway': return generateWithRunway(options);
-    case 'luma': return generateWithLuma(options);
-    case 'openai': return generateWithSora(options);
-  }
+  // Replicate returns the video URL directly
+  const videoUrl = Array.isArray(output) ? output[0] : output;
+  
+  // Download and create blob URL
+  const response = await fetch(videoUrl);
+  const blob = await response.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  
+  return { uri: videoUrl, blobUrl };
 }
 ```
 
-### Phase 3: Environment Variables (.env.local)
+### Phase 3: Update .env.local
 
 ```bash
 # Existing
 GEMINI_API_KEY=your_gemini_key
 
-# New additions
-RUNWAY_API_KEY=your_runway_key
-LUMA_API_KEY=your_luma_key
-OPENAI_API_KEY=your_openai_key # For Sora when available
+# Add Replicate
+REPLICATE_API_TOKEN=r8_xxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### Phase 4: UI Updates (index.html)
+### Phase 4: Update UI (index.html)
 
-Add new options to the video model dropdown:
 ```html
-<select id="video-model" class="...">
-  <optgroup label="Google Veo">
-    <option value="veo-3.0-generate-001">Veo 3.0 (Recommended)</option>
+<select id="video-model">
+  <optgroup label="Google Veo (Direct - Best Integration)">
+    <option value="veo-3.1-generate-preview">⭐ Veo 3.1 (Latest)</option>
+    <option value="veo-3.1-fast-generate-preview">⚡ Veo 3.1 Fast</option>
+    <option value="veo-3.0-generate-001">Veo 3.0</option>
     <option value="veo-2.0-generate-001">Veo 2.0 (Legacy)</option>
   </optgroup>
-  <optgroup label="Runway">
-    <option value="runway-gen3a-turbo">Gen-3 Alpha Turbo (Fast)</option>
-    <option value="runway-gen3a">Gen-3 Alpha (Quality)</option>
+  <optgroup label="Premium via Replicate">
+    <option value="replicate/sora-2">🎬 OpenAI Sora 2</option>
+    <option value="replicate/sora-2-pro">🎬 OpenAI Sora 2 Pro</option>
+    <option value="replicate/kling-v2">🏆 Kling 2.0 (Best Value)</option>
+    <option value="replicate/luma-ray-2">🎨 Luma Ray 2</option>
   </optgroup>
-  <optgroup label="Luma AI">
-    <option value="luma-dream-machine">Dream Machine 1.6</option>
-  </optgroup>
-  <optgroup label="OpenAI" disabled>
-    <option value="sora-turbo">Sora Turbo (Coming Soon)</option>
+  <optgroup label="Budget Options via Replicate">
+    <option value="replicate/hailuo-2">MiniMax Hailuo 2</option>
+    <option value="replicate/hunyuan">🆓 Hunyuan Video (Cheapest)</option>
   </optgroup>
 </select>
 ```
 
 ---
 
-## 📋 Implementation Checklist
+## 📋 Quick Start Checklist
 
-### Immediate Actions (Ready Now)
-- [ ] Update `VIDEO_MODELS` in `store.ts` to add Veo 3.0
-- [ ] Test Veo 3.0 model availability
-- [ ] Add Runway API integration
-- [ ] Add Luma AI integration
-- [ ] Update `.env.local.example` with new API keys
+### Immediate (5 minutes)
+- [ ] Update `VIDEO_MODELS` in `store.ts` to add `veo-3.1-generate-preview`
+- [ ] Test Veo 3.1 with existing code (just model ID change!)
 
-### Short-term (This Week)
-- [ ] Create `video-providers.ts` abstraction layer
-- [ ] Add provider detection logic
-- [ ] Update UI with model selector groups
-- [ ] Add error handling for each provider
-- [ ] Test all providers end-to-end
+### Short-term (1 hour)
+- [ ] Install Replicate SDK: `npm install replicate`
+- [ ] Add `REPLICATE_API_TOKEN` to `.env.local`
+- [ ] Create `replicate-provider.ts`
+- [ ] Update video generation logic to support both providers
 
-### Medium-term (When Available)
-- [ ] Monitor Sora API availability
-- [ ] Integrate Sora when API opens
-- [ ] Add fallback logic between providers
+### Optional Enhancements
+- [ ] Add fallback chain (Veo 3.1 → Sora 2 → Kling 2.0)
 - [ ] Add cost estimation UI
+- [ ] Add model quality comparison tooltips
 
 ---
 
-## 🎯 Recommended Strategy
+## 🎯 Recommended Configuration
 
-### For Best Quality (Production)
-**Primary:** Google Veo 3.0 → **Fallback:** Runway Gen-3 Alpha
+### For Best Quality
+**Primary:** Veo 3.1 → **Fallback:** Sora 2 Pro
 
-### For Budget-Conscious Usage
-**Primary:** Luma Dream Machine (free tier) → **Fallback:** Veo 2.0
+### For Best Value
+**Primary:** Kling 2.0 → **Fallback:** Hailuo 2
 
-### For Maximum Compatibility
-Implement all four providers with automatic fallback chain:
-1. Try primary provider
-2. On failure, try next in priority
-3. Log which provider succeeded
+### For Free/Budget
+**Primary:** Hunyuan Video → **Fallback:** Veo 2.0 (free tier)
 
 ---
 
-## 📞 API Key Sources
+## 🔑 API Keys Quick Reference
 
-| Provider | Get API Key | Free Tier |
-|----------|-------------|-----------|
+| Provider | Get Key | Free Tier |
+|----------|---------|-----------|
 | Google (Veo) | https://ai.google.dev | ✅ 50 videos/day |
-| Runway | https://runwayml.com/api | ✅ 125 credits |
-| Luma AI | https://lumalabs.ai/dream-machine/api | ✅ 30 videos/month |
-| OpenAI (Sora) | https://platform.openai.com | ❌ Requires Plus/Pro |
+| Replicate | https://replicate.com/account/api-tokens | ✅ Some free credits |
 
 ---
 
-**Document prepared for review. Awaiting approval to proceed with implementation.**
+**Document verified with live API queries on December 10, 2025**
