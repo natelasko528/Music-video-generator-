@@ -272,19 +272,6 @@ function formatTime(seconds: number): string {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-function validatePlannerModel(modelId: string): PlannerModelId {
-    const allowedModels = Object.values(PLANNER_MODELS) as string[];
-    if (allowedModels.includes(modelId)) {
-        return modelId as PlannerModelId;
-    }
-    return PLANNER_MODELS.default;
-}
-
-function describePlannerModel(modelId: PlannerModelId): string {
-    if (modelId === PLANNER_MODELS.fast) return 'Gemini Nano Banana (Fast)';
-    return 'Gemini 3 Pro Preview (Default)';
-}
-
 async function checkApiKey() {
     let hasKey = false;
     if (window.aistudio && window.aistudio.hasSelectedApiKey) {
