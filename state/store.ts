@@ -7,6 +7,7 @@ export const PLANNER_MODELS = {
 } as const;
 
 export const VIDEO_MODELS = {
+  huggingface: 'huggingface-free',
   qwen: 'qwen-max-latest',
   veo: 'veo-3.1-generate-preview',
 } as const;
@@ -58,7 +59,7 @@ const DEFAULT_STATE: ProjectState = {
   audioDuration: 0,
   transitionType: 'cut',
   plannerModel: PLANNER_MODELS.default,
-  videoModel: VIDEO_MODELS.qwen,
+  videoModel: VIDEO_MODELS.huggingface,
   activeTab: 'setup',
   lastSavedAt: null,
   version: STATE_VERSION,
@@ -122,12 +123,13 @@ export function describePlannerModel(modelId: PlannerModelId): string {
 
 export function validateVideoModel(modelId: string): VideoModelId {
   const allowed = Object.values(VIDEO_MODELS) as string[];
-  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS.qwen;
+  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS.huggingface;
 }
 
 export function describeVideoModel(modelId: VideoModelId): string {
   if (modelId === VIDEO_MODELS.veo) return 'Veo 3.1 (Google)';
-  return 'Qwen Max (Default)';
+  if (modelId === VIDEO_MODELS.qwen) return 'Qwen Max (Alibaba)';
+  return 'Hugging Face (FREE)';
 }
 
 function notify(next: ProjectState, prev: ProjectState) {

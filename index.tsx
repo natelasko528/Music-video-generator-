@@ -1174,6 +1174,90 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 }
 
+// --- HUGGING FACE VIDEO GENERATION (FREE) ---
+
+interface HuggingFaceVideoResult {
+    videoBlob: Blob;
+}
+
+async function generateVideoWithHuggingFace(
+    prompt: string,
+    aspectRatio: string
+): Promise<HuggingFaceVideoResult> {
+    const apiKey = process.env.HF_API_KEY || process.env.HUGGINGFACE_API_KEY;
+    if (!apiKey) {
+        throw new Error('HF_API_KEY is not configured. Get a FREE token at https://huggingface.co/settings/tokens and add it to your .env.local file.');
+    }
+
+    log(`Starting Hugging Face video generation (FREE)...`, 'info', {
+        context: { model: 'text-to-video-ms-1.7b', promptLength: prompt.length },
+        verbose: true
+    });
+
+    // Use the free text-to-video model
+    const HF_MODEL = 'damo-vilab/text-to-video-ms-1.7b';
+    const HF_API_URL = `https://api-inference.huggingface.co/models/${HF_MODEL}`;
+
+    // Hugging Face inference API for text-to-video
+    const response = await fetch(HF_API_URL, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            inputs: prompt,
+            parameters: {
+                num_frames: 24,
+                num_inference_steps: 25,
+            }
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        
+        // Check if model is loading (common with free tier)
+        if (response.status === 503) {
+            const errorData = JSON.parse(errorText);
+            if (errorData.estimated_time) {
+                log(`Model is loading, estimated wait: ${Math.round(errorData.estimated_time)}s`, 'warn');
+                throw new Error(`Model is loading. Please wait ${Math.round(errorData.estimated_time)} seconds and try again.`);
+            }
+        }
+        
+        throw new Error(`Hugging Face API error (${response.status}): ${errorText}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    
+    if (contentType?.includes('video') || contentType?.includes('octet-stream')) {
+        // Direct video response
+        const videoBlob = await response.blob();
+        log(`Hugging Face video generation complete! Size: ${videoBlob.size} bytes`, 'success');
+        return { videoBlob };
+    } else {
+        // Might be JSON with an error or base64
+        const data = await response.json();
+        if (data.error) {
+            throw new Error(`Hugging Face error: ${data.error}`);
+        }
+        // Handle base64 video response
+        if (data.video || data[0]) {
+            const base64Data = data.video || data[0];
+            const binaryString = atob(base64Data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            const videoBlob = new Blob([bytes], { type: 'video/mp4' });
+            log(`Hugging Face video generation complete! Size: ${videoBlob.size} bytes`, 'success');
+            return { videoBlob };
+        }
+        throw new Error('Unexpected response format from Hugging Face');
+    }
+}
+
 // --- QWEN VIDEO GENERATION ---
 
 interface QwenVideoResult {
@@ -1369,9 +1453,10 @@ async function generateVideoWithVeo(
 
     const videoModel = state.videoModel;
     const isQwen = videoModel === VIDEO_MODELS.qwen;
+    const isHuggingFace = videoModel === VIDEO_MODELS.huggingface;
 
     // Only check Gemini API key if using Veo
-    if (!isQwen) {
+    if (!isQwen && !isHuggingFace) {
         await checkApiKey();
     }
 
@@ -1420,7 +1505,33 @@ async function generateVideoWithVeo(
             let videoUrl: string;
             let videoUri: string | undefined;
 
-            if (isQwen) {
+            if (isHuggingFace) {
+                // Use Hugging Face for video generation (FREE!)
+                log(`Video Config prepared`, "info", {
+                    context: {
+                        model: 'huggingface-free',
+                        aspectRatio,
+                        attempt: attempts,
+                        note: 'FREE - No cost!'
+                    },
+                    verbose: true
+                });
+
+                const result = await generateVideoWithHuggingFace(
+                    currentPrompt,
+                    aspectRatio
+                );
+
+                log(`Hugging Face video received`, "success");
+                
+                if (result.videoBlob.size === 0) {
+                    throw new Error("Generated video is empty");
+                }
+
+                videoUrl = URL.createObjectURL(result.videoBlob);
+                videoUri = undefined; // HF doesn't provide persistent URIs
+
+            } else if (isQwen) {
                 // Use Qwen for video generation
                 log(`Video Config prepared`, "info", {
                     context: {
