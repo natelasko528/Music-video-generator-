@@ -1174,6 +1174,129 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 }
 
+// --- REPLICATE VIDEO GENERATION (Free Alternative) ---
+
+interface ReplicateVideoResult {
+    videoUrl: string;
+    predictionId: string;
+}
+
+async function generateVideoWithReplicate(
+    prompt: string,
+    aspectRatio: string,
+    styleImageBase64?: string
+): Promise<ReplicateVideoResult> {
+    const apiKey = process.env.REPLICATE_API_KEY;
+    if (!apiKey) {
+        throw new Error('REPLICATE_API_KEY is not configured. Please add it to your .env.local file.');
+    }
+
+    log(`Creating Replicate video generation task...`, 'info', {
+        context: { model: 'animate-diff', aspectRatio, promptLength: prompt.length },
+        verbose: true
+    });
+
+    // Use AnimateDiff model via Replicate
+    // Model: lucataco/animate-diff
+    const model = 'lucataco/animate-diff';
+    
+    const input: any = {
+        prompt: prompt,
+        num_frames: 16,
+        guidance_scale: 7.5,
+        num_inference_steps: 25,
+    };
+
+    // Add image if provided
+    if (styleImageBase64) {
+        // Convert base64 to data URL
+        const imageDataUrl = `data:image/png;base64,${styleImageBase64}`;
+        input.image = imageDataUrl;
+    }
+
+    // Create prediction
+    const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Token ${apiKey}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            version: 'beecf59c4aee8d81f04d340cc0c89fdecfbed8a4', // AnimateDiff version
+            input: input
+        })
+    });
+
+    if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        throw new Error(`Replicate API error (${createResponse.status}): ${errorText}`);
+    }
+
+    const createResult = await createResponse.json();
+    const predictionId = createResult.id;
+    
+    if (!predictionId) {
+        throw new Error(`No prediction ID in Replicate response: ${JSON.stringify(createResult)}`);
+    }
+
+    log(`Replicate prediction created: ${predictionId}`, 'success');
+    log(`Polling for completion...`, 'info');
+
+    // Poll for completion
+    let pollCount = 0;
+    const maxPolls = 120; // 10 minutes max (5s intervals)
+    
+    while (pollCount < maxPolls) {
+        pollCount++;
+        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
+
+        const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Token ${apiKey}`,
+            }
+        });
+
+        if (!statusResponse.ok) {
+            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
+            continue;
+        }
+
+        const statusResult = await statusResponse.json();
+        const status = statusResult.status;
+        
+        log(`Poll #${pollCount}: status=${status}`, 'info', { verbose: true });
+
+        if (status === 'succeeded') {
+            const videoUrl = statusResult.output;
+            if (!videoUrl || (Array.isArray(videoUrl) && videoUrl.length === 0)) {
+                throw new Error('Replicate prediction succeeded but no video returned');
+            }
+            
+            // Handle array or single URL
+            const finalVideoUrl = Array.isArray(videoUrl) ? videoUrl[0] : videoUrl;
+            
+            // Download video and convert to blob URL
+            log(`Downloading video from Replicate...`, 'info');
+            const videoRes = await fetch(finalVideoUrl);
+            if (!videoRes.ok) {
+                throw new Error(`Failed to download video: ${videoRes.status}`);
+            }
+            const blob = await videoRes.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            
+            log(`Replicate video generation complete!`, 'success');
+            return { videoUrl: blobUrl, predictionId };
+        } else if (status === 'failed' || status === 'canceled') {
+            const errorMsg = statusResult.error || 'Unknown error';
+            throw new Error(`Replicate video generation failed: ${errorMsg}`);
+        }
+        // Continue polling for 'starting', 'processing' states
+    }
+
+    throw new Error('Replicate video generation timed out after 10 minutes');
+}
+
 // --- QWEN VIDEO GENERATION ---
 
 interface QwenVideoResult {
@@ -1369,9 +1492,10 @@ async function generateVideoWithVeo(
 
     const videoModel = state.videoModel;
     const isQwen = videoModel === VIDEO_MODELS.qwen;
+    const isReplicate = videoModel === VIDEO_MODELS.replicate;
 
     // Only check Gemini API key if using Veo
-    if (!isQwen) {
+    if (!isQwen && !isReplicate) {
         await checkApiKey();
     }
 
@@ -1420,7 +1544,29 @@ async function generateVideoWithVeo(
             let videoUrl: string;
             let videoUri: string | undefined;
 
-            if (isQwen) {
+            if (isReplicate) {
+                // Use Replicate for video generation
+                log(`Video Config prepared`, "info", {
+                    context: {
+                        model: videoModel,
+                        aspectRatio,
+                        attempt: attempts,
+                        styleImageAttached: Boolean(styleImage)
+                    },
+                    verbose: true
+                });
+
+                const result = await generateVideoWithReplicate(
+                    currentPrompt,
+                    aspectRatio,
+                    styleImage?.imageBytes
+                );
+
+                log(`Replicate video URL received`, "success");
+                videoUrl = result.videoUrl;
+                videoUri = result.videoUrl; // Store the blob URL
+
+            } else if (isQwen) {
                 // Use Qwen for video generation
                 log(`Video Config prepared`, "info", {
                     context: {

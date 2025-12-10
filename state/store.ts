@@ -9,6 +9,7 @@ export const PLANNER_MODELS = {
 export const VIDEO_MODELS = {
   qwen: 'qwen-max-latest',
   veo: 'veo-3.1-generate-preview',
+  replicate: 'replicate-animate-diff',
 } as const;
 
 export type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
@@ -58,7 +59,7 @@ const DEFAULT_STATE: ProjectState = {
   audioDuration: 0,
   transitionType: 'cut',
   plannerModel: PLANNER_MODELS.default,
-  videoModel: VIDEO_MODELS.qwen,
+  videoModel: VIDEO_MODELS.replicate,
   activeTab: 'setup',
   lastSavedAt: null,
   version: STATE_VERSION,
@@ -127,6 +128,7 @@ export function validateVideoModel(modelId: string): VideoModelId {
 
 export function describeVideoModel(modelId: VideoModelId): string {
   if (modelId === VIDEO_MODELS.veo) return 'Veo 3.1 (Google)';
+  if (modelId === VIDEO_MODELS.replicate) return 'AnimateDiff (Replicate - Free)';
   return 'Qwen Max (Default)';
 }
 
