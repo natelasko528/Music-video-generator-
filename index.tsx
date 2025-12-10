@@ -812,33 +812,59 @@ planButton.addEventListener('click', async () => {
     `;
 
     try {
-        const generateStoryboard = async (modelId: PlannerModelId) => ai.models.generateContent({
-            model: modelId,
-            contents: { parts: [{ text: "Plan the music video storyboard." }] },
-            config: {
-                systemInstruction,
-                responseMimeType: 'application/json',
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        scenes: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    id: { type: Type.STRING },
-                                    startTime: { type: Type.NUMBER },
-                                    endTime: { type: Type.NUMBER },
-                                    description: { type: Type.STRING },
-                                    visualPrompt: { type: Type.STRING }
-                                },
-                                required: ["id", "startTime", "endTime", "visualPrompt"]
+        const generateStoryboard = async (modelId: PlannerModelId) => {
+            const apiCallStart = performance.now();
+            log(`Initiating Gemini API call to ${modelId}...`, 'info', { verbose: true });
+            
+            try {
+                const response = await ai.models.generateContent({
+                    model: modelId,
+                    contents: { parts: [{ text: "Plan the music video storyboard." }] },
+                    config: {
+                        systemInstruction,
+                        responseMimeType: 'application/json',
+                        responseSchema: {
+                            type: Type.OBJECT,
+                            properties: {
+                                scenes: {
+                                    type: Type.ARRAY,
+                                    items: {
+                                        type: Type.OBJECT,
+                                        properties: {
+                                            id: { type: Type.STRING },
+                                            startTime: { type: Type.NUMBER },
+                                            endTime: { type: Type.NUMBER },
+                                            description: { type: Type.STRING },
+                                            visualPrompt: { type: Type.STRING }
+                                        },
+                                        required: ["id", "startTime", "endTime", "visualPrompt"]
+                                    }
+                                }
                             }
                         }
                     }
-                }
+                });
+                
+                const apiCallDuration = Math.round(performance.now() - apiCallStart);
+                log(`Gemini API call completed in ${apiCallDuration}ms`, 'success', {
+                    context: { model: modelId, durationMs: apiCallDuration },
+                    verbose: true
+                });
+                
+                return response;
+            } catch (apiError: any) {
+                const apiCallDuration = Math.round(performance.now() - apiCallStart);
+                log(`Gemini API call failed after ${apiCallDuration}ms`, 'error', {
+                    context: {
+                        model: modelId,
+                        error: apiError?.message || 'Unknown error',
+                        errorCode: apiError?.code || 'N/A',
+                        durationMs: apiCallDuration
+                    }
+                });
+                throw apiError;
             }
-        });
+        };
 
         let response;
         try {
@@ -1046,7 +1072,11 @@ function detectSafetyCategory(errorMessage: string): 'violence' | 'substance' | 
 
 async function generateSafeReferenceImage(prompt: string): Promise<{ base64: string, mime: string } | null> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    log("Generating safe reference image to guide Veo...", "warn");
+    const imageGenStart = performance.now();
+    log("Generating safe reference image to guide Veo...", "warn", {
+        context: { model: 'imagen-3.0-generate-001' },
+        verbose: true
+    });
 
     try {
         // Use Imagen 3 to create a safe reference image
@@ -1060,14 +1090,26 @@ async function generateSafeReferenceImage(prompt: string): Promise<{ base64: str
         });
 
         if (response.generatedImages?.[0]?.image?.imageBytes) {
+            const duration = Math.round(performance.now() - imageGenStart);
+            log("Safe reference image generated successfully.", "success", {
+                context: { durationMs: duration },
+                verbose: true
+            });
             return {
                 base64: response.generatedImages[0].image.imageBytes,
                 mime: 'image/png' // Imagen usually returns PNG
             };
         }
+        log("Image generation returned no images.", "warn", { verbose: true });
         return null;
-    } catch (e) {
-        console.error("Image generation failed", e);
+    } catch (e: any) {
+        log("Image generation failed", "error", {
+            context: {
+                error: e?.message || 'Unknown error',
+                durationMs: Math.round(performance.now() - imageGenStart)
+            },
+            verbose: true
+        });
         return null;
     }
 }
@@ -1083,11 +1125,12 @@ async function sanitizePrompt(originalPrompt: string): Promise<string> {
         verbose: true
     });
 
-    const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: { parts: [{ text: `Original Prompt: "${originalPrompt}"` }] },
-        config: {
-            systemInstruction: `You are a Video Prompt Rewriter specializing in making prompts safe for AI video generation while PRESERVING HIP-HOP AESTHETICS.
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            contents: { parts: [{ text: `Original Prompt: "${originalPrompt}"` }] },
+            config: {
+                systemInstruction: `You are a Video Prompt Rewriter specializing in making prompts safe for AI video generation while PRESERVING HIP-HOP AESTHETICS.
 
 The original prompt was blocked by the safety filter. Your task is to REWRITE the prompt to be safe but keep the vibe.
 
@@ -1102,17 +1145,33 @@ RULES:
 6. Add CINEMATIC keywords to distract filters: "shot on 35mm", "anamorphic", "depth of field", "4k", "color graded".
 
 Return ONLY the rewritten prompt text, nothing else.`,
+            }
+        });
+        const rewritten = response.text.trim();
+        
+        if (!rewritten || rewritten.length === 0) {
+            throw new Error("Sanitizer returned empty prompt");
         }
-    });
-    const rewritten = response.text;
-    log("Sanitizer returned safe prompt.", 'success', {
-        context: {
-            durationMs: Math.round(performance.now() - sanitizeStart),
-            rewrittenLength: rewritten.length
-        },
-        verbose: true
-    });
-    return rewritten;
+        
+        log("Sanitizer returned safe prompt.", 'success', {
+            context: {
+                durationMs: Math.round(performance.now() - sanitizeStart),
+                rewrittenLength: rewritten.length,
+                originalLength: originalPrompt.length
+            },
+            verbose: true
+        });
+        return rewritten;
+    } catch (error: any) {
+        log("Sanitizer failed, using fallback prompt.", 'warn', {
+            context: {
+                error: error?.message || 'Unknown error',
+                durationMs: Math.round(performance.now() - sanitizeStart)
+            }
+        });
+        // Fallback: generic safe prompt
+        return "Cinematic music video scene, professional lighting, high quality, 4k";
+    }
 }
 
 // --- QWEN VIDEO GENERATION ---
@@ -1539,16 +1598,50 @@ async function generateVideoWithVeo(
 renderAllBtn.addEventListener('click', async () => {
     if (!confirm("Start rendering all pending scenes? This may take time.")) return;
 
+    await checkApiKey();
     log("Batch rendering initiated.", "system");
     const scenesSnapshot = [...getProjectState().scenes];
-    for (const scene of scenesSnapshot) {
-        if (scene.status !== 'done') {
-            await (window as any).renderSingleScene(scene.id);
-            // Brief pause
-            await new Promise(r => setTimeout(r, 2000));
+    const pendingScenes = scenesSnapshot.filter(s => s.status !== 'done' && s.status !== 'generating' && s.status !== 'sanitizing');
+    
+    if (pendingScenes.length === 0) {
+        log("No scenes to render. All scenes are already done or in progress.", "warn");
+        return;
+    }
+
+    log(`Starting parallel rendering of ${pendingScenes.length} scenes...`, "system", {
+        context: { totalScenes: pendingScenes.length }
+    });
+
+    // Render scenes in parallel with concurrency limit
+    const CONCURRENT_RENDERS = 2; // Limit concurrent renders to avoid API rate limits
+    const renderPromises: Promise<void>[] = [];
+    let completed = 0;
+    let failed = 0;
+
+    for (let i = 0; i < pendingScenes.length; i += CONCURRENT_RENDERS) {
+        const batch = pendingScenes.slice(i, i + CONCURRENT_RENDERS);
+        const batchPromises = batch.map(async (scene) => {
+            try {
+                await (window as any).renderSingleScene(scene.id);
+                completed++;
+                log(`Scene ${scene.id} completed (${completed}/${pendingScenes.length})`, "success", { verbose: true });
+            } catch (error) {
+                failed++;
+                log(`Scene ${scene.id} failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+            }
+        });
+        
+        await Promise.all(batchPromises);
+        
+        // Brief pause between batches to avoid rate limiting
+        if (i + CONCURRENT_RENDERS < pendingScenes.length) {
+            await new Promise(r => setTimeout(r, 1000));
         }
     }
-    log("Batch rendering complete.", "success");
+
+    log(`Batch rendering complete. ${completed} succeeded, ${failed} failed.`, "success", {
+        context: { completed, failed, total: pendingScenes.length }
+    });
 });
 
 
