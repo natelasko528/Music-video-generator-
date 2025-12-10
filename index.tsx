@@ -12,8 +12,12 @@ import {
     resetProjectState,
     describePlannerModel,
     validatePlannerModel,
+    describeVideoModel,
+    validateVideoModel,
     PLANNER_MODELS,
+    VIDEO_MODELS,
     type PlannerModelId,
+    type VideoModelId,
     type ProjectState,
     type Scene
 } from './state/store';
@@ -53,6 +57,7 @@ const aspectRatioSelect = document.getElementById('aspect-ratio') as HTMLSelectE
 const clipLengthSelect = document.getElementById('clip-length') as HTMLSelectElement;
 const transitionSelect = document.getElementById('transition-select') as HTMLSelectElement;
 const plannerModelSelect = document.getElementById('planner-model') as HTMLSelectElement;
+const videoModelSelect = document.getElementById('video-model') as HTMLSelectElement;
 const styleInput = document.getElementById('style-image') as HTMLInputElement;
 const stylePreview = document.getElementById('style-preview') as HTMLImageElement;
 
@@ -308,6 +313,7 @@ function syncStateToUI(state: ProjectState, prev?: ProjectState) {
     syncClipLengthControls(state);
     syncTransitionControl(state);
     syncPlannerModelControl(state);
+    syncVideoModelControl(state);
     syncAudioDurationLabels(state);
     syncActiveTabUI(state.activeTab);
     updateSaveStatusDisplay(state.lastSavedAt, prev?.lastSavedAt ?? null);
@@ -377,6 +383,12 @@ function syncTransitionControl(state: ProjectState) {
 function syncPlannerModelControl(state: ProjectState) {
     if (plannerModelSelect && plannerModelSelect.value !== state.plannerModel) {
         plannerModelSelect.value = state.plannerModel;
+    }
+}
+
+function syncVideoModelControl(state: ProjectState) {
+    if (videoModelSelect && videoModelSelect.value !== state.videoModel) {
+        videoModelSelect.value = state.videoModel;
     }
 }
 
@@ -631,7 +643,7 @@ async function handleVocalRemoval() {
     } catch (err) {
         console.error(err);
         updateVocalRemovalStatus(err instanceof Error ? err.message : 'Failed to process audio.', 'error');
-        log('Vocal reduction failed.', 'error', { err: String(err) });
+        log('Vocal reduction failed.', 'error', { context: { error: String(err) } });
     } finally {
         vocalRemovalBtn.disabled = false;
         vocalRemovalBtn.textContent = 'Mute explicit lyrics (keep the music)';
@@ -691,6 +703,18 @@ plannerModelSelect.addEventListener('change', () => {
     updateProjectState({ plannerModel: validatedModel });
     log(`Planner model set to: ${describePlannerModel(validatedModel)}`, 'info');
 });
+
+if (videoModelSelect) {
+    videoModelSelect.addEventListener('change', () => {
+        const validatedModel = validateVideoModel(videoModelSelect.value);
+        if (validatedModel !== videoModelSelect.value) {
+            log('Invalid video model selection detected. Reverting to default.', 'warn');
+        }
+        videoModelSelect.value = validatedModel;
+        updateProjectState({ videoModel: validatedModel });
+        log(`Video model set to: ${describeVideoModel(validatedModel)}`, 'info');
+    });
+}
 
 promptInput.addEventListener('input', () => {
     updateProjectState({ lyrics: promptInput.value });
@@ -950,7 +974,66 @@ function renderSceneList(state: ProjectState) {
 
 // --- VEO RENDER LOGIC with SAFETY RECOVERY ---
 
-// --- HELPER FUNCTIONS FOR SAFETY ---
+// --- HELPER FUNCTIONS FOR ERROR HANDLING ---
+
+function isRateLimitError(error: any): boolean {
+    if (!error) return false;
+    const message = error.message || String(error);
+    return message.includes('429') ||
+           message.includes('RESOURCE_EXHAUSTED') ||
+           message.includes('quota') ||
+           message.includes('rate limit') ||
+           message.includes('rate-limit');
+}
+
+function parseErrorMessage(error: any): string {
+    if (!error) return 'Unknown error';
+    
+    // Try to extract message from JSON error response
+    const rawMessage = error.message || String(error);
+    
+    // Check for JSON-formatted error
+    try {
+        const jsonMatch = rawMessage.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed.error?.message) {
+                return parsed.error.message;
+            }
+        }
+    } catch {
+        // Not JSON, continue with raw message
+    }
+    
+    return rawMessage;
+}
+
+function getUserFriendlyErrorMessage(error: any): string {
+    const message = parseErrorMessage(error);
+    
+    if (isRateLimitError(error)) {
+        return 'API rate limit exceeded. The system will automatically retry. Check your Gemini API quota at ai.dev/usage';
+    }
+    
+    if (message.includes('Safety') || message.includes('blocked')) {
+        return 'Content was blocked by safety filters. Retrying with safer prompt...';
+    }
+    
+    if (message.includes('API Key') || message.includes('INVALID_API_KEY')) {
+        return 'Invalid API key. Please check your configuration.';
+    }
+    
+    // Truncate long messages
+    if (message.length > 150) {
+        return message.substring(0, 147) + '...';
+    }
+    
+    return message;
+}
+
+async function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function detectSafetyCategory(errorMessage: string): 'violence' | 'substance' | 'explicit' | 'money' | 'general' {
     const lower = errorMessage.toLowerCase();
@@ -1006,7 +1089,7 @@ async function sanitizePrompt(originalPrompt: string): Promise<string> {
         config: {
             systemInstruction: `You are a Video Prompt Rewriter specializing in making prompts safe for AI video generation while PRESERVING HIP-HOP AESTHETICS.
 
-The original prompt was blocked by Veo's safety filter. Your task is to REWRITE the prompt to be safe but keep the vibe.
+The original prompt was blocked by the safety filter. Your task is to REWRITE the prompt to be safe but keep the vibe.
 
 RULES:
 1. Remove ALL references to: money stacks, counting bills, drugs, smoking weed/blunts, alcohol, weapons, shooting, explicit nudity/sex.
@@ -1032,10 +1115,185 @@ Return ONLY the rewritten prompt text, nothing else.`,
     return rewritten;
 }
 
-(window as any).renderSingleScene = async (sceneId: string) => {
-    await checkApiKey();
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// --- QWEN VIDEO GENERATION ---
 
+interface QwenVideoResult {
+    videoUrl: string;
+    taskId: string;
+}
+
+async function generateVideoWithQwen(
+    prompt: string,
+    aspectRatio: string,
+    styleImageBase64?: string
+): Promise<QwenVideoResult> {
+    const apiKey = process.env.QWEN_API_KEY;
+    if (!apiKey) {
+        throw new Error('QWEN_API_KEY is not configured. Please add it to your .env.local file.');
+    }
+
+    // Map aspect ratio to Qwen format
+    const sizeMap: Record<string, string> = {
+        '16:9': '1280*720',
+        '9:16': '720*1280',
+        '1:1': '720*720'
+    };
+    const size = sizeMap[aspectRatio] || '1280*720';
+
+    log(`Creating Qwen video generation task...`, 'info', {
+        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
+        verbose: true
+    });
+
+    // Step 1: Create video generation task
+    const createTaskPayload: any = {
+        model: 'qwen-max-latest',
+        input: {
+            prompt: prompt
+        },
+        parameters: {
+            size: size,
+            duration: 5,
+            fps: 24
+        }
+    };
+
+    // Add style image if provided (image-to-video)
+    if (styleImageBase64) {
+        createTaskPayload.input.image_url = `data:image/png;base64,${styleImageBase64}`;
+        log(`Using reference image for Qwen generation...`, 'info');
+    }
+
+    const createResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/generation', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+            'X-DashScope-Async': 'enable'
+        },
+        body: JSON.stringify(createTaskPayload)
+    });
+
+    if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        throw new Error(`Qwen API error (${createResponse.status}): ${errorText}`);
+    }
+
+    const createResult = await createResponse.json();
+    
+    if (createResult.code && createResult.code !== '200' && createResult.code !== 200) {
+        throw new Error(`Qwen task creation failed: ${createResult.message || JSON.stringify(createResult)}`);
+    }
+
+    const taskId = createResult.output?.task_id;
+    if (!taskId) {
+        throw new Error(`No task_id in Qwen response: ${JSON.stringify(createResult)}`);
+    }
+
+    log(`Qwen task created: ${taskId}`, 'success');
+    log(`Polling for completion...`, 'info');
+
+    // Step 2: Poll for task completion
+    let pollCount = 0;
+    const maxPolls = 120; // 10 minutes max (5s intervals)
+    
+    while (pollCount < maxPolls) {
+        pollCount++;
+        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
+
+        const statusResponse = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`
+            }
+        });
+
+        if (!statusResponse.ok) {
+            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
+            continue;
+        }
+
+        const statusResult = await statusResponse.json();
+        const taskStatus = statusResult.output?.task_status;
+
+        log(`Poll #${pollCount}: status=${taskStatus}`, 'info', { verbose: true });
+
+        if (taskStatus === 'SUCCEEDED') {
+            const videoUrl = statusResult.output?.video_url;
+            if (!videoUrl) {
+                throw new Error('Qwen task succeeded but no video_url returned');
+            }
+            log(`Qwen video generation complete!`, 'success');
+            return { videoUrl, taskId };
+        } else if (taskStatus === 'FAILED') {
+            const errorMsg = statusResult.output?.message || 'Unknown error';
+            throw new Error(`Qwen video generation failed: ${errorMsg}`);
+        }
+        // Continue polling for PENDING, RUNNING states
+    }
+
+    throw new Error('Qwen video generation timed out after 10 minutes');
+}
+
+// --- VEO VIDEO GENERATION (Legacy/Fallback) ---
+
+async function generateVideoWithVeo(
+    ai: any,
+    prompt: string,
+    aspectRatio: string,
+    styleImage?: { imageBytes: string; mimeType: string }
+): Promise<{ uri: string }> {
+    const videoConfig: any = {
+        numberOfVideos: 1,
+        resolution: '1080p',
+        aspectRatio
+    };
+
+    log(`Sending prompt to Veo...`, 'info', {
+        context: { promptPreview: `${prompt.substring(0, 120)}${prompt.length > 120 ? '...' : ''}` },
+        verbose: true
+    });
+
+    let veoOperation;
+    if (styleImage) {
+        log(`Using reference image for Veo generation (${styleImage.mimeType})...`, 'info');
+        veoOperation = await ai.models.generateVideos({
+            model: 'veo-3.1-generate-preview',
+            prompt: prompt,
+            image: styleImage,
+            config: videoConfig
+        });
+    } else {
+        log(`No reference image - text-only Veo generation...`, 'info');
+        veoOperation = await ai.models.generateVideos({
+            model: 'veo-3.1-generate-preview',
+            prompt: prompt,
+            config: videoConfig
+        });
+    }
+
+    log(`Veo API call successful. Operation created.`, 'success');
+    log(`Operation Name: ${veoOperation.name || 'N/A'}`, 'info');
+    log(`Polling for completion...`, 'info');
+
+    let pollCount = 0;
+    while (!veoOperation.done) {
+        pollCount++;
+        await new Promise(r => setTimeout(r, 4000));
+        veoOperation = await ai.operations.getVideosOperation({ operation: veoOperation });
+        log(`Poll #${pollCount}: done=${veoOperation.done}`, 'info', { verbose: true });
+    }
+
+    log(`Veo polling complete after ${pollCount} polls.`, 'success');
+
+    if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
+        return { uri: veoOperation.response.generatedVideos[0].video.uri };
+    }
+
+    throw new Error('Veo returned no video (Possible Safety Block)');
+}
+
+(window as any).renderSingleScene = async (sceneId: string) => {
     const renderStart = performance.now();
 
     const findScene = () => {
@@ -1050,6 +1308,14 @@ Return ONLY the rewritten prompt text, nothing else.`,
         return;
     }
 
+    const videoModel = state.videoModel;
+    const isQwen = videoModel === VIDEO_MODELS.qwen;
+
+    // Only check Gemini API key if using Veo
+    if (!isQwen) {
+        await checkApiKey();
+    }
+
     mutateScene(sceneId, scene => {
         scene.status = 'generating';
         scene.errorMsg = undefined;
@@ -1060,6 +1326,7 @@ Return ONLY the rewritten prompt text, nothing else.`,
 
     log(`========== RENDER START: Scene #${index + 1} ==========`, "system");
     log(`Scene ID: ${sceneId}`, "info");
+    log(`Video Model: ${describeVideoModel(videoModel)} (${videoModel})`, "system");
 
     let currentPrompt = baseScene.visualPrompt;
     log(`Original Prompt: "${currentPrompt.substring(0, 100)}..."`, "info");
@@ -1081,7 +1348,8 @@ Return ONLY the rewritten prompt text, nothing else.`,
             context: {
                 attempt: attempts,
                 maxAttempts,
-                promptLength: currentPrompt.length
+                promptLength: currentPrompt.length,
+                videoModel
             },
             verbose: true
         });
@@ -1090,67 +1358,31 @@ Return ONLY the rewritten prompt text, nothing else.`,
         const aspectRatio = latestState.aspectRatio;
 
         try {
-            const videoConfig: any = {
-                numberOfVideos: 1,
-                resolution: '1080p',
-                aspectRatio
-            };
+            let videoUrl: string;
+            let videoUri: string | undefined;
 
-            log(`Video Config prepared`, "info", {
-                context: {
-                    model: 'veo-3.1-generate-preview',
-                    config: videoConfig,
-                    attempt: attempts,
-                    styleImageAttached: Boolean(styleImage)
-                },
-                verbose: true
-            });
-            log(`Sending prompt to Veo`, "info", {
-                context: {
-                    promptPreview: `${currentPrompt.substring(0, 120)}${currentPrompt.length > 120 ? '...' : ''}`
-                },
-                verbose: true
-            });
-
-            let veoOperation;
-
-            if (styleImage) {
-                log(`Using reference image for generation (${styleImage.mimeType})...`, 'info');
-                veoOperation = await ai.models.generateVideos({
-                    model: 'veo-3.1-generate-preview',
-                    prompt: currentPrompt,
-                    image: styleImage,
-                    config: videoConfig
+            if (isQwen) {
+                // Use Qwen for video generation
+                log(`Video Config prepared`, "info", {
+                    context: {
+                        model: videoModel,
+                        aspectRatio,
+                        attempt: attempts,
+                        styleImageAttached: Boolean(styleImage)
+                    },
+                    verbose: true
                 });
-            } else {
-                log(`No reference image - text-only generation...`, 'info');
-                veoOperation = await ai.models.generateVideos({
-                    model: 'veo-3.1-generate-preview',
-                    prompt: currentPrompt,
-                    config: videoConfig
-                });
-            }
 
-            log(`Veo API call successful. Operation created.`, "success");
-            log(`Operation Name: ${veoOperation.name || 'N/A'}`, "info");
-            log(`Polling for completion...`, "info");
+                const result = await generateVideoWithQwen(
+                    currentPrompt,
+                    aspectRatio,
+                    styleImage?.imageBytes
+                );
 
-            let pollCount = 0;
-            while (!veoOperation.done) {
-                pollCount++;
-                await new Promise(r => setTimeout(r, 4000));
-                veoOperation = await ai.operations.getVideosOperation({ operation: veoOperation });
-                log(`Poll #${pollCount}: done=${veoOperation.done}`, "info");
-            }
-
-            log(`Polling complete after ${pollCount} polls.`, "success");
-
-            if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
-                const uri = veoOperation.response.generatedVideos[0].video.uri;
-                log(`Video URI received: ${uri.substring(0, 50)}...`, "success");
+                log(`Qwen video URL received`, "success");
                 log("Downloading video...", "info");
 
-                const res = await fetch(appendApiKey(uri));
+                const res = await fetch(result.videoUrl);
                 log(`Download response: ${res.status} ${res.statusText}`, "info");
 
                 if (!res.ok) {
@@ -1162,46 +1394,93 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 if (blob.size === 0) {
                     throw new Error("Downloaded video is empty");
                 }
-                const blobUrl = URL.createObjectURL(blob);
 
-                mutateScene(sceneId, scene => {
-                    scene.status = 'done';
-                    scene.videoUri = uri;
-                    scene.videoUrl = blobUrl;
-                    scene.visualPrompt = currentPrompt;
-                });
+                videoUrl = URL.createObjectURL(blob);
+                videoUri = result.videoUrl; // Store the original URL
 
-                log(`========== RENDER SUCCESS: Scene #${index + 1} ==========`, "success", {
-                    context: {
-                        durationMs: Math.round(performance.now() - attemptStart),
-                        totalElapsedMs: Math.round(performance.now() - renderStart),
-                        attempt: attempts
-                    }
-                });
-                return;
             } else {
-                log(`ERROR: No video URI in response.`, "error");
-                log(`Response object: ${JSON.stringify(veoOperation.response || {}).substring(0, 200)}`, "warn");
-                throw new Error("Veo returned no video (Possible Safety Block)");
+                // Use Veo for video generation (legacy/fallback)
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                
+                log(`Video Config prepared`, "info", {
+                    context: {
+                        model: videoModel,
+                        aspectRatio,
+                        attempt: attempts,
+                        styleImageAttached: Boolean(styleImage)
+                    },
+                    verbose: true
+                });
+
+                const result = await generateVideoWithVeo(
+                    ai,
+                    currentPrompt,
+                    aspectRatio,
+                    styleImage
+                );
+
+                log(`Video URI received: ${result.uri.substring(0, 50)}...`, "success");
+                log("Downloading video...", "info");
+
+                const res = await fetch(appendApiKey(result.uri));
+                log(`Download response: ${res.status} ${res.statusText}`, "info");
+
+                if (!res.ok) {
+                    throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
+                }
+                const blob = await res.blob();
+                log(`Downloaded blob size: ${blob.size} bytes`, "info");
+
+                if (blob.size === 0) {
+                    throw new Error("Downloaded video is empty");
+                }
+
+                videoUrl = URL.createObjectURL(blob);
+                videoUri = result.uri;
             }
 
+            // Success - update scene
+            mutateScene(sceneId, scene => {
+                scene.status = 'done';
+                scene.videoUri = videoUri;
+                scene.videoUrl = videoUrl;
+                scene.visualPrompt = currentPrompt;
+            });
+
+            log(`========== RENDER SUCCESS: Scene #${index + 1} ==========`, "success", {
+                context: {
+                    durationMs: Math.round(performance.now() - attemptStart),
+                    totalElapsedMs: Math.round(performance.now() - renderStart),
+                    attempt: attempts,
+                    videoModel
+                }
+            });
+            return;
+
         } catch (e: any) {
-            console.error("Veo Error:", e);
+            console.error("Video Generation Error:", e);
             log(`CATCH: ${e.message}`, "error", {
                 context: {
                     attempt: attempts,
-                    durationMs: Math.round(performance.now() - attemptStart)
+                    durationMs: Math.round(performance.now() - attemptStart),
+                    videoModel
                 },
                 verbose: true
             });
             log(`Error name: ${e.name || 'N/A'}`, "error", { verbose: true });
 
-            if (attempts < maxAttempts && (e.message.includes("Safety") || e.message.includes("no video"))) {
+            // Check if this is a retryable error
+            const isRetryableError = e.message.includes("Safety") || 
+                                     e.message.includes("no video") ||
+                                     e.message.includes("failed") ||
+                                     e.message.includes("FAILED");
+
+            if (attempts < maxAttempts && isRetryableError) {
                 const category = detectSafetyCategory(e.message);
-                log(`Safety Block Detected (${category}): ${e.message}`, "warn", {
+                log(`Error Detected (${category}): ${e.message}`, "warn", {
                     context: {
                         attempt: attempts,
-                        strategy: attempts === 1 ? 'reference-regeneration' : 'hard-fallback'
+                        strategy: attempts === 1 ? 'prompt-sanitization' : 'hard-fallback'
                     }
                 });
 
@@ -1210,34 +1489,23 @@ Return ONLY the rewritten prompt text, nothing else.`,
                 });
 
                 if (attempts === 1) {
-                    log(`=== STRATEGY 1: Drop Image + Generate Safe Reference ===`, "system");
+                    log(`=== STRATEGY 1: Sanitize Prompt ===`, "system");
 
                     if (styleImage) {
-                        log("Dropping previous style image (potential safety trigger).", "warn");
+                        log("Dropping style image (potential trigger).", "warn");
                         styleImage = undefined;
                     }
 
-                    log("Generating Safe Reference Image via Imagen...", "system");
-                    const safeImage = await generateSafeReferenceImage(currentPrompt);
-
-                    if (safeImage) {
-                        styleImage = {
-                            imageBytes: safeImage.base64,
-                            mimeType: safeImage.mime
-                        };
-                        log("Safe reference image created successfully.", "success");
-                    } else {
-                        log("Image generation failed. Falling back to text sanitization...", "warn", { verbose: true });
-                        const newPrompt = await sanitizePrompt(currentPrompt);
-                        log(`Sanitized Prompt updated.`, "info", {
-                            context: {
-                                attempt: attempts,
-                                newLength: newPrompt.length
-                            },
-                            verbose: true
-                        });
-                        currentPrompt = newPrompt;
-                    }
+                    // For Qwen, we rely more on prompt sanitization
+                    const newPrompt = await sanitizePrompt(currentPrompt);
+                    log(`Sanitized Prompt updated.`, "info", {
+                        context: {
+                            attempt: attempts,
+                            newLength: newPrompt.length
+                        },
+                        verbose: true
+                    });
+                    currentPrompt = newPrompt;
                 } else {
                     log(`=== STRATEGY 2: Aggressive Generic Prompt ===`, "system", { verbose: true });
                     currentPrompt = "Abstract cinematic music video scene, atmospheric lighting, moody, high quality, 4k";

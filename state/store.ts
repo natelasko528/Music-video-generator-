@@ -6,7 +6,13 @@ export const PLANNER_MODELS = {
   fast: 'gemini-2.0-nano-banana',
 } as const;
 
+export const VIDEO_MODELS = {
+  qwen: 'qwen-max-latest',
+  veo: 'veo-3.1-generate-preview',
+} as const;
+
 export type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
+export type VideoModelId = typeof VIDEO_MODELS[keyof typeof VIDEO_MODELS];
 export type TransitionType = 'cut' | 'crossfade' | 'fadeblack';
 export type SceneStatus = 'pending' | 'generating' | 'done' | 'error' | 'sanitizing';
 export type ActiveTab = 'setup' | 'timeline' | 'preview';
@@ -33,6 +39,7 @@ export interface ProjectState {
   audioDuration: number;
   transitionType: TransitionType;
   plannerModel: PlannerModelId;
+  videoModel: VideoModelId;
   activeTab: ActiveTab;
   lastSavedAt: number | null;
   version: number;
@@ -51,6 +58,7 @@ const DEFAULT_STATE: ProjectState = {
   audioDuration: 0,
   transitionType: 'cut',
   plannerModel: PLANNER_MODELS.default,
+  videoModel: VIDEO_MODELS.qwen,
   activeTab: 'setup',
   lastSavedAt: null,
   version: STATE_VERSION,
@@ -112,6 +120,16 @@ export function describePlannerModel(modelId: PlannerModelId): string {
   return 'Gemini 3 Pro Preview (Default)';
 }
 
+export function validateVideoModel(modelId: string): VideoModelId {
+  const allowed = Object.values(VIDEO_MODELS) as string[];
+  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS.qwen;
+}
+
+export function describeVideoModel(modelId: VideoModelId): string {
+  if (modelId === VIDEO_MODELS.veo) return 'Veo 3.1 (Google)';
+  return 'Qwen Max (Default)';
+}
+
 function notify(next: ProjectState, prev: ProjectState) {
   subscribers.forEach((listener) => listener(next, prev));
 }
@@ -162,6 +180,7 @@ function normalizeProjectState(candidate: ProjectState): ProjectState {
     transitionType,
     activeTab,
     plannerModel: validatePlannerModel(candidate.plannerModel),
+    videoModel: validateVideoModel(candidate.videoModel),
     scenes: Array.isArray(candidate.scenes) ? candidate.scenes.map(normalizeScene) : [],
     version: STATE_VERSION,
   };
