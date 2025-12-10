@@ -950,7 +950,66 @@ function renderSceneList(state: ProjectState) {
 
 // --- VEO RENDER LOGIC with SAFETY RECOVERY ---
 
-// --- HELPER FUNCTIONS FOR SAFETY ---
+// --- HELPER FUNCTIONS FOR ERROR HANDLING ---
+
+function isRateLimitError(error: any): boolean {
+    if (!error) return false;
+    const message = error.message || String(error);
+    return message.includes('429') ||
+           message.includes('RESOURCE_EXHAUSTED') ||
+           message.includes('quota') ||
+           message.includes('rate limit') ||
+           message.includes('rate-limit');
+}
+
+function parseErrorMessage(error: any): string {
+    if (!error) return 'Unknown error';
+    
+    // Try to extract message from JSON error response
+    const rawMessage = error.message || String(error);
+    
+    // Check for JSON-formatted error
+    try {
+        const jsonMatch = rawMessage.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (parsed.error?.message) {
+                return parsed.error.message;
+            }
+        }
+    } catch {
+        // Not JSON, continue with raw message
+    }
+    
+    return rawMessage;
+}
+
+function getUserFriendlyErrorMessage(error: any): string {
+    const message = parseErrorMessage(error);
+    
+    if (isRateLimitError(error)) {
+        return 'API rate limit exceeded. The system will automatically retry. Check your Gemini API quota at ai.dev/usage';
+    }
+    
+    if (message.includes('Safety') || message.includes('blocked')) {
+        return 'Content was blocked by safety filters. Retrying with safer prompt...';
+    }
+    
+    if (message.includes('API Key') || message.includes('INVALID_API_KEY')) {
+        return 'Invalid API key. Please check your configuration.';
+    }
+    
+    // Truncate long messages
+    if (message.length > 150) {
+        return message.substring(0, 147) + '...';
+    }
+    
+    return message;
+}
+
+async function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function detectSafetyCategory(errorMessage: string): 'violence' | 'substance' | 'explicit' | 'money' | 'general' {
     const lower = errorMessage.toLowerCase();
