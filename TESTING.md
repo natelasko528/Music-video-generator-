@@ -37,22 +37,40 @@ npx playwright install chromium
 
 The test suite covers:
 
-1. **Storyboard Generation Flow**
-   - Verifies automatic navigation to Timeline tab after successful generation
-   - Validates that scenes are created and displayed correctly
-   - Confirms console log messages appear
+1. **Tab Navigation**
+   - Verifies starting on Setup tab
+   - Tests manual tab switching between Setup, Timeline, and Preview
+   - Validates panel visibility changes with tab state
 
-2. **Error Handling**
-   - Ensures user stays on Setup tab if generation fails
-   - Tests validation for missing audio files
+2. **Audio Upload**
+   - Tests audio file upload functionality
+   - Verifies duration display updates correctly
 
-3. **Mobile Responsiveness**
+3. **Error Handling**
+   - Ensures user stays on Setup tab if generation fails (no audio uploaded)
+   - Tests validation alerts for missing requirements
+
+4. **Mobile Responsiveness**
+   - All tests use mobile viewport (375x667)
    - Verifies Generate Storyboard button is visible on mobile viewports
    - Tests button styling and clickability
 
+5. **Storyboard Generation (Requires API Key)**
+   - Verifies automatic navigation to Timeline tab after successful generation
+   - Validates that scenes are created and displayed correctly
+   - Confirms console log messages appear
+   - **Note:** This test is skipped by default as it requires a valid GEMINI_API_KEY
+
+### Test Fixtures
+
+Test fixtures are located in `tests/fixtures/`:
+
+- `sample-audio.wav` - A 5-second generated WAV file for audio upload testing
+- `create-test-audio.cjs` - Script to regenerate the test audio file if needed
+
 ### Manual Testing
 
-To manually test the new auto-navigation feature:
+To manually test the full storyboard generation feature:
 
 1. Start the dev server:
    ```bash
@@ -79,17 +97,14 @@ To manually test the new auto-navigation feature:
 - This creates a smoother, more intuitive user experience
 - Users immediately see the results of their storyboard generation
 
-**Code changes:**
-- `index.tsx:359-364` - Added automatic tab navigation logic
-- `index.tsx:372-381` - Restored full button HTML with gradient styling
-
 ### Test Files
 
 - `tests/storyboard-generation.spec.ts` - Main test suite
+- `tests/fixtures/sample-audio.wav` - Test audio fixture
 - `playwright.config.ts` - Playwright configuration
 
 ### Known Limitations
 
-- Tests require API keys for Google Gemini and Veo to fully test generation
+- Full storyboard generation test requires API keys for Google Gemini (skipped by default)
+- Tab navigation tests use mobile viewport since header tabs are hidden on desktop (lg:hidden)
 - Browser downloads may be restricted in sandboxed environments
-- Mock fixtures would be needed for fully automated CI/CD testing
