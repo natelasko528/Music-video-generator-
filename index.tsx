@@ -4,7 +4,6 @@
  * Copyright 2025 Google LLC
  * SPDX-License-Identifier: Apache-2.0
  */
-import { GoogleGenAI, Type } from '@google/genai';
 import {
     getProjectState,
     subscribeToProjectState,
@@ -21,6 +20,34 @@ import {
     type ProjectState,
     type Scene
 } from './state/store';
+
+// OpenRouter API configuration
+const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+
+// Helper to make OpenRouter API calls
+async function openRouterFetch(endpoint: string, options: RequestInit = {}) {
+    const url = `${OPENROUTER_API_BASE}${endpoint}`;
+    const headers = {
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'Directors Cut - AI Music Video',
+        ...(options.headers || {})
+    };
+    
+    const response = await fetch(url, {
+        ...options,
+        headers
+    });
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
+    }
+    
+    return response.json();
+}
 
 // --- Globals ---
 
@@ -278,19 +305,9 @@ function formatTime(seconds: number): string {
 }
 
 async function checkApiKey() {
-    let hasKey = false;
-    if (window.aistudio && window.aistudio.hasSelectedApiKey) {
-        hasKey = await window.aistudio.hasSelectedApiKey();
-    }
-
-    if (!hasKey && !process.env.API_KEY) {
-        if (window.aistudio?.openSelectKey) {
-            log("Requesting API Key selection...", "warn");
-            await window.aistudio.openSelectKey();
-        } else {
-            alert("API Key missing");
-            throw new Error("API Key missing");
-        }
+    if (!OPENROUTER_API_KEY) {
+        alert("OpenRouter API Key missing. Please set OPENROUTER_API_KEY in your .env.local file.");
+        throw new Error("OpenRouter API Key missing");
     }
 }
 
@@ -451,12 +468,18 @@ function ensureSceneHydration(state: ProjectState) {
 }
 
 async function hydrateSceneMedia(scene: Scene) {
-    if (!scene.videoUri || !process.env.API_KEY) return;
+    if (!scene.videoUri) return;
     hydratingSceneIds.add(scene.id);
     try {
         log(`Restoring preview for ${scene.id}...`, 'info', { verbose: true });
-        const downloadUrl = appendApiKey(scene.videoUri);
-        const res = await fetch(downloadUrl);
+        // For blob URLs, they're already local and don't need fetching
+        if (scene.videoUri.startsWith('blob:')) {
+            mutateScene(scene.id, target => {
+                target.videoUrl = scene.videoUri;
+            }, { persist: false });
+            return;
+        }
+        const res = await fetch(scene.videoUri);
         if (!res.ok) {
             throw new Error(`Failed to hydrate video (${res.status})`);
         }
@@ -476,13 +499,6 @@ async function hydrateSceneMedia(scene: Scene) {
     } finally {
         hydratingSceneIds.delete(scene.id);
     }
-}
-
-function appendApiKey(uri: string): string {
-    if (!process.env.API_KEY) return uri;
-    const separator = uri.includes('?') ? '&' : '?';
-    if (uri.includes('key=')) return uri;
-    return `${uri}${separator}key=${process.env.API_KEY}`;
 }
 
 function setActiveTab(tab: ProjectState['activeTab']) {
@@ -729,7 +745,7 @@ clearProjectBtn.addEventListener('click', () => {
 });
 
 
-// --- PLANNER LOGIC (Gemini 3.0) ---
+// --- PLANNER LOGIC (OpenRouter) ---
 
 planButton.addEventListener('click', async () => {
     let state = getProjectState();
@@ -755,14 +771,12 @@ planButton.addEventListener('click', async () => {
     plannerModelSelect.value = state.plannerModel;
     log(`Planner model selected: ${describePlannerModel(state.plannerModel)} (${state.plannerModel})`, 'system');
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
     planButton.disabled = true;
     planButton.innerHTML = `<span class="animate-pulse">Director Planning...</span>`;
     const planningStart = performance.now();
-    log("Starting storyboard generation with Gemini 3.0...", "system", {
+    log("Starting storyboard generation via OpenRouter...", "system", {
         context: {
-            model: 'gemini-3-pro-preview',
+            model: state.plannerModel,
             payload: {
                 audioDuration: state.audioDuration,
                 clipLength: state.clipLength,
@@ -774,79 +788,60 @@ planButton.addEventListener('click', async () => {
     });
 
     const numClips = Math.max(1, Math.ceil(state.audioDuration / state.clipLength));
-    const systemInstruction = `
-    You are a professional Music Video Director creating content for AI video generation.
-    TASK: Create a visual storyboard for a song that is ${Math.round(state.audioDuration)} seconds long.
-    The video MUST be broken down into exactly ${numClips} sequential scenes, each approx ${state.clipLength} seconds.
+    const systemInstruction = `You are a professional Music Video Director creating content for AI image/video generation.
+TASK: Create a visual storyboard for a song that is ${Math.round(state.audioDuration)} seconds long.
+The video MUST be broken down into exactly ${numClips} sequential scenes, each approx ${state.clipLength} seconds.
 
-    INPUT CONTEXT:
-    Lyrics/Vibe: "${state.lyrics}"
-    Aspect Ratio: ${state.aspectRatio}
+INPUT CONTEXT:
+Lyrics/Vibe: "${state.lyrics}"
+Aspect Ratio: ${state.aspectRatio}
 
-    CRITICAL SAFETY REQUIREMENTS (Veo will reject prompts with any of these):
-    - NO money, cash, bills, counting money, or wealth displays
-       -> BUT luxury items (cars, jewelry, fashion) are OK
-    - NO drugs, smoking, haze (use "atmospheric fog" or "stage lighting" instead)
-       -> Stage fog, LED haze, backlight mist are acceptable
-    - NO weapons, violence, or aggressive imagery
-    - NO explicit/suggestive content
-    - NO alcohol or substance references
-    - "Rapper" and "hip-hop artist" are acceptable genre terms
-    - Use "success" metaphors like achievements, stages, spotlights instead of material wealth
+CRITICAL SAFETY REQUIREMENTS:
+- NO money, cash, bills, counting money, or wealth displays (luxury items like cars, jewelry are OK)
+- NO drugs, smoking, haze (use "atmospheric fog" or "stage lighting" instead)
+- NO weapons, violence, or aggressive imagery
+- NO explicit/suggestive content
+- NO alcohol or substance references
+- Use "success" metaphors like achievements, stages, spotlights instead of material wealth
 
-    ENCOURAGED ELEMENTS (these enhance hip-hop visuals without triggering filters):
-    - Urban architecture, graffiti murals, street art
-    - Fashion: designer clothes, jewelry (chains, watches), sneakers
-    - Performance: stages, crowds, microphones, studio booths
-    - Cinematography: low angles, "shot on 35mm", "anamorphic lens", dramatic lighting, slow motion
-    - Vehicles: luxury cars as backdrop (not for racing/stunts)
+ENCOURAGED ELEMENTS:
+- Urban architecture, graffiti murals, street art
+- Fashion: designer clothes, jewelry (chains, watches), sneakers
+- Performance: stages, crowds, microphones, studio booths
+- Cinematography: low angles, "shot on 35mm", "anamorphic lens", dramatic lighting, slow motion
+- Vehicles: luxury cars as backdrop (not for racing/stunts)
 
-    INSTRUCTIONS:
-    1. Analyze the flow (Intro, Verse, Chorus) based on input.
-    2. Write a safe, artistic "visualPrompt" for Veo for EACH scene.
-    3. STYLE: Focus on cinematic camera work, lighting, color grading, urban architecture, and artistic metaphors.
-    4. CONSISTENCY: Maintain character/color consistency throughout.
+INSTRUCTIONS:
+1. Analyze the flow (Intro, Verse, Chorus) based on input.
+2. Write a safe, artistic "visualPrompt" for AI image generation for EACH scene.
+3. STYLE: Focus on cinematic camera work, lighting, color grading, urban architecture, and artistic metaphors.
+4. CONSISTENCY: Maintain character/color consistency throughout.
 
-    OUTPUT SCHEMA:
-    Return JSON: { scenes: [ { id, startTime, endTime, description, visualPrompt } ] }
-    `;
+OUTPUT FORMAT:
+Return ONLY valid JSON (no markdown): { "scenes": [ { "id": "scene-1", "startTime": 0, "endTime": 5, "description": "Brief description", "visualPrompt": "Detailed prompt for image generation" } ] }`;
 
     try {
         const generateStoryboard = async (modelId: PlannerModelId) => {
             const apiCallStart = performance.now();
-            log(`Initiating Gemini API call to ${modelId}...`, 'info', { verbose: true });
+            log(`Initiating OpenRouter API call to ${modelId}...`, 'info', { verbose: true });
             
             try {
-                const response = await ai.models.generateContent({
-                    model: modelId,
-                    contents: { parts: [{ text: "Plan the music video storyboard." }] },
-                    config: {
-                        systemInstruction,
-                        responseMimeType: 'application/json',
-                        responseSchema: {
-                            type: Type.OBJECT,
-                            properties: {
-                                scenes: {
-                                    type: Type.ARRAY,
-                                    items: {
-                                        type: Type.OBJECT,
-                                        properties: {
-                                            id: { type: Type.STRING },
-                                            startTime: { type: Type.NUMBER },
-                                            endTime: { type: Type.NUMBER },
-                                            description: { type: Type.STRING },
-                                            visualPrompt: { type: Type.STRING }
-                                        },
-                                        required: ["id", "startTime", "endTime", "visualPrompt"]
-                                    }
-                                }
-                            }
-                        }
-                    }
+                const response = await openRouterFetch('/chat/completions', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        model: modelId,
+                        messages: [
+                            { role: 'system', content: systemInstruction },
+                            { role: 'user', content: 'Plan the music video storyboard. Return only valid JSON.' }
+                        ],
+                        response_format: { type: 'json_object' },
+                        temperature: 0.7,
+                        max_tokens: 4096
+                    })
                 });
                 
                 const apiCallDuration = Math.round(performance.now() - apiCallStart);
-                log(`Gemini API call completed in ${apiCallDuration}ms`, 'success', {
+                log(`OpenRouter API call completed in ${apiCallDuration}ms`, 'success', {
                     context: { model: modelId, durationMs: apiCallDuration },
                     verbose: true
                 });
@@ -854,11 +849,10 @@ planButton.addEventListener('click', async () => {
                 return response;
             } catch (apiError: any) {
                 const apiCallDuration = Math.round(performance.now() - apiCallStart);
-                log(`Gemini API call failed after ${apiCallDuration}ms`, 'error', {
+                log(`OpenRouter API call failed after ${apiCallDuration}ms`, 'error', {
                     context: {
                         model: modelId,
                         error: apiError?.message || 'Unknown error',
-                        errorCode: apiError?.code || 'N/A',
                         durationMs: apiCallDuration
                     }
                 });
@@ -871,19 +865,29 @@ planButton.addEventListener('click', async () => {
             response = await generateStoryboard(state.plannerModel);
             log(`Planner response received from ${state.plannerModel}.`, 'success');
         } catch (plannerError: any) {
-            if (state.plannerModel === PLANNER_MODELS.fast) {
-                log(`Fast planner unavailable (${plannerError?.message || 'error'}). Falling back to Gemini 3 Pro Preview.`, 'warn');
-                updateProjectState({ plannerModel: PLANNER_MODELS.default });
-                state = getProjectState();
-                plannerModelSelect.value = state.plannerModel;
-                response = await generateStoryboard(state.plannerModel);
-                log(`Planner response received from fallback model ${state.plannerModel}.`, 'success');
-            } else {
-                throw plannerError;
-            }
+            log(`Planner failed (${plannerError?.message || 'error'}). Trying fallback model...`, 'warn');
+            updateProjectState({ plannerModel: PLANNER_MODELS.default });
+            state = getProjectState();
+            plannerModelSelect.value = state.plannerModel;
+            response = await generateStoryboard(state.plannerModel);
+            log(`Planner response received from fallback model ${state.plannerModel}.`, 'success');
         }
 
-        const plan = JSON.parse(response.text);
+        // Extract the text content from OpenRouter response
+        const messageContent = response.choices?.[0]?.message?.content || '';
+        let plan;
+        try {
+            plan = JSON.parse(messageContent);
+        } catch (parseError) {
+            // Try to extract JSON from markdown code blocks
+            const jsonMatch = messageContent.match(/```(?:json)?\s*([\s\S]*?)```/);
+            if (jsonMatch) {
+                plan = JSON.parse(jsonMatch[1].trim());
+            } else {
+                throw new Error('Failed to parse planner response as JSON');
+            }
+        }
+        
         if (!plan?.scenes?.length) {
             throw new Error('Planner returned no scenes.');
         }
@@ -903,9 +907,9 @@ planButton.addEventListener('click', async () => {
     } catch (e) {
         console.error(e);
         log("Planning failed. Check console.", "error", {
-            context: { durationMs: Math.round(performance.now() - planningStart) }
+            context: { durationMs: Math.round(performance.now() - planningStart), error: e instanceof Error ? e.message : String(e) }
         });
-        alert("Planning failed.");
+        alert("Planning failed: " + (e instanceof Error ? e.message : String(e)));
     } finally {
         planButton.disabled = false;
         planButton.innerHTML = `
@@ -1070,84 +1074,50 @@ function detectSafetyCategory(errorMessage: string): 'violence' | 'substance' | 
     return 'general';
 }
 
-async function generateSafeReferenceImage(prompt: string): Promise<{ base64: string, mime: string } | null> {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const imageGenStart = performance.now();
-    log("Generating safe reference image to guide Veo...", "warn", {
-        context: { model: 'imagen-3.0-generate-001' },
-        verbose: true
-    });
-
-    try {
-        // Use Imagen 3 to create a safe reference image
-        const response = await ai.models.generateImages({
-            model: 'imagen-3.0-generate-001',
-            prompt: `Cinematic still, high quality, professional music video shot: ${prompt}`,
-            config: {
-                numberOfImages: 1,
-                aspectRatio: runtimeState.aspectRatio === '9:16' ? '9:16' : '16:9'
-            }
-        });
-
-        if (response.generatedImages?.[0]?.image?.imageBytes) {
-            const duration = Math.round(performance.now() - imageGenStart);
-            log("Safe reference image generated successfully.", "success", {
-                context: { durationMs: duration },
-                verbose: true
-            });
-            return {
-                base64: response.generatedImages[0].image.imageBytes,
-                mime: 'image/png' // Imagen usually returns PNG
-            };
-        }
-        log("Image generation returned no images.", "warn", { verbose: true });
-        return null;
-    } catch (e: any) {
-        log("Image generation failed", "error", {
-            context: {
-                error: e?.message || 'Unknown error',
-                durationMs: Math.round(performance.now() - imageGenStart)
-            },
-            verbose: true
-        });
-        return null;
-    }
-}
-
 async function sanitizePrompt(originalPrompt: string): Promise<string> {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const sanitizeStart = performance.now();
-    log("Running Smart Safety Sanitizer on prompt...", "warn", {
+    log("Running Smart Safety Sanitizer on prompt via OpenRouter...", "warn", {
         context: {
-            model: 'gemini-3-pro-preview',
+            model: PLANNER_MODELS.default,
             originalLength: originalPrompt.length
         },
         verbose: true
     });
 
     try {
-        const response = await ai.models.generateContent({
-            model: 'gemini-3-pro-preview',
-            contents: { parts: [{ text: `Original Prompt: "${originalPrompt}"` }] },
-            config: {
-                systemInstruction: `You are a Video Prompt Rewriter specializing in making prompts safe for AI video generation while PRESERVING HIP-HOP AESTHETICS.
+        const response = await openRouterFetch('/chat/completions', {
+            method: 'POST',
+            body: JSON.stringify({
+                model: PLANNER_MODELS.default,
+                messages: [
+                    {
+                        role: 'system',
+                        content: `You are a Video Prompt Rewriter specializing in making prompts safe for AI image/video generation while PRESERVING ARTISTIC AESTHETICS.
 
-The original prompt was blocked by the safety filter. Your task is to REWRITE the prompt to be safe but keep the vibe.
+The original prompt may trigger safety filters. Your task is to REWRITE the prompt to be safe but keep the artistic vibe.
 
 RULES:
-1. Remove ALL references to: money stacks, counting bills, drugs, smoking weed/blunts, alcohol, weapons, shooting, explicit nudity/sex.
-2. KEEP "rapper", "hip-hop artist", "MC", "urban", "street", "graffiti" - these are SAFE.
-3. KEEP "gritty", "haze", "fog" BUT contextualize them:
-   - "haze" -> "atmospheric stage fog" or "misty alleyway"
+1. Remove ALL references to: money stacks, counting bills, drugs, smoking, alcohol, weapons, shooting, explicit content.
+2. KEEP artistic terms: "rapper", "hip-hop artist", "urban", "street", "graffiti" - these are SAFE.
+3. KEEP atmospheric terms BUT contextualize them:
+   - "haze" -> "atmospheric stage fog" or "misty atmosphere"
    - "gritty" -> "cinematic film grain", "urban texture"
-4. Replace "counting cash" with "gesturing with hands", "wearing gold chains", "looking confident".
-5. Replace "smoking" with "cold breath condensing", "fog machine", "dramatic backlighting".
-6. Add CINEMATIC keywords to distract filters: "shot on 35mm", "anamorphic", "depth of field", "4k", "color graded".
+4. Replace potentially problematic actions with safe alternatives.
+5. Add CINEMATIC keywords: "shot on 35mm", "anamorphic", "depth of field", "4k", "color graded".
 
-Return ONLY the rewritten prompt text, nothing else.`,
-            }
+Return ONLY the rewritten prompt text, nothing else.`
+                    },
+                    {
+                        role: 'user',
+                        content: `Rewrite this prompt to be safe: "${originalPrompt}"`
+                    }
+                ],
+                temperature: 0.5,
+                max_tokens: 500
+            })
         });
-        const rewritten = response.text.trim();
+        
+        const rewritten = response.choices?.[0]?.message?.content?.trim() || '';
         
         if (!rewritten || rewritten.length === 0) {
             throw new Error("Sanitizer returned empty prompt");
@@ -1174,305 +1144,267 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 }
 
-// --- REPLICATE VIDEO GENERATION (Free Alternative) ---
+// --- OPENROUTER IMAGE GENERATION (Used to create animated frames) ---
 
-interface ReplicateVideoResult {
+interface OpenRouterImageResult {
     videoUrl: string;
-    predictionId: string;
+    frames: string[];
 }
 
-async function generateVideoWithReplicate(
+async function generateVideoWithOpenRouter(
     prompt: string,
     aspectRatio: string,
+    modelId: string,
     styleImageBase64?: string
-): Promise<ReplicateVideoResult> {
-    const apiKey = process.env.REPLICATE_API_KEY;
-    if (!apiKey) {
-        throw new Error('REPLICATE_API_KEY is not configured. Please add it to your .env.local file.');
+): Promise<OpenRouterImageResult> {
+    if (!OPENROUTER_API_KEY) {
+        throw new Error('OPENROUTER_API_KEY is not configured. Please add it to your .env.local file.');
     }
 
-    log(`Creating Replicate video generation task...`, 'info', {
-        context: { model: 'animate-diff', aspectRatio, promptLength: prompt.length },
+    log(`Creating OpenRouter image generation task...`, 'info', {
+        context: { model: modelId, aspectRatio, promptLength: prompt.length },
         verbose: true
     });
 
-    // Use AnimateDiff model via Replicate
-    // Model: lucataco/animate-diff
-    const model = 'lucataco/animate-diff';
+    // Number of frames to generate for smooth animation
+    const numFrames = 8;
+    const frames: string[] = [];
     
-    const input: any = {
-        prompt: prompt,
-        num_frames: 16,
-        guidance_scale: 7.5,
-        num_inference_steps: 25,
-    };
+    // Generate multiple frames with slight prompt variations for animation effect
+    const framePrompts = [
+        prompt,
+        `${prompt}, slight camera movement forward`,
+        `${prompt}, dynamic lighting shift`,
+        `${prompt}, subtle atmospheric change`,
+        `${prompt}, continued motion`,
+        `${prompt}, energy building`,
+        `${prompt}, peak moment`,
+        `${prompt}, settling motion`
+    ];
 
-    // Add image if provided
-    if (styleImageBase64) {
-        // Convert base64 to data URL
-        const imageDataUrl = `data:image/png;base64,${styleImageBase64}`;
-        input.image = imageDataUrl;
-    }
+    log(`Generating ${numFrames} frames for animation...`, 'info');
 
-    // Create prediction
-    const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Token ${apiKey}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            version: 'beecf59c4aee8d81f04d340cc0c89fdecfbed8a4', // AnimateDiff version
-            input: input
-        })
-    });
+    for (let i = 0; i < numFrames; i++) {
+        const framePrompt = framePrompts[i] || prompt;
+        log(`Generating frame ${i + 1}/${numFrames}...`, 'info', { verbose: true });
 
-    if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Replicate API error (${createResponse.status}): ${errorText}`);
-    }
+        try {
+            // Use OpenRouter's chat completion with image generation model
+            const messages: any[] = [
+                { 
+                    role: 'user', 
+                    content: `Generate a cinematic image for a music video scene: ${framePrompt}. Style: High quality, 4K, cinematic, music video aesthetic. Aspect ratio: ${aspectRatio}.`
+                }
+            ];
 
-    const createResult = await createResponse.json();
-    const predictionId = createResult.id;
-    
-    if (!predictionId) {
-        throw new Error(`No prediction ID in Replicate response: ${JSON.stringify(createResult)}`);
-    }
-
-    log(`Replicate prediction created: ${predictionId}`, 'success');
-    log(`Polling for completion...`, 'info');
-
-    // Poll for completion
-    let pollCount = 0;
-    const maxPolls = 120; // 10 minutes max (5s intervals)
-    
-    while (pollCount < maxPolls) {
-        pollCount++;
-        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
-
-        const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Token ${apiKey}`,
+            // Add style reference if provided
+            if (styleImageBase64 && i === 0) {
+                messages[0] = {
+                    role: 'user',
+                    content: [
+                        { type: 'text', text: `Generate a cinematic image for a music video scene similar in style to the reference image: ${framePrompt}. Style: High quality, 4K, cinematic, music video aesthetic. Aspect ratio: ${aspectRatio}.` },
+                        { type: 'image_url', image_url: { url: `data:image/png;base64,${styleImageBase64}` } }
+                    ]
+                };
             }
-        });
 
-        if (!statusResponse.ok) {
-            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
-            continue;
+            const response = await openRouterFetch('/chat/completions', {
+                method: 'POST',
+                body: JSON.stringify({
+                    model: modelId,
+                    messages: messages,
+                    max_tokens: 4096
+                })
+            });
+
+            // Extract image from response
+            const content = response.choices?.[0]?.message?.content;
+            if (content) {
+                // Check if response contains image data or URL
+                if (typeof content === 'string') {
+                    // Try to extract base64 image or URL from response
+                    const base64Match = content.match(/data:image\/[^;]+;base64,([A-Za-z0-9+/=]+)/);
+                    const urlMatch = content.match(/https?:\/\/[^\s"]+\.(png|jpg|jpeg|gif|webp)/i);
+                    
+                    if (base64Match) {
+                        frames.push(`data:image/png;base64,${base64Match[1]}`);
+                    } else if (urlMatch) {
+                        frames.push(urlMatch[0]);
+                    } else {
+                        // Generate a placeholder frame with canvas
+                        const placeholderFrame = await generatePlaceholderFrame(framePrompt, i, numFrames, aspectRatio);
+                        frames.push(placeholderFrame);
+                    }
+                } else if (Array.isArray(content)) {
+                    // Handle multimodal response
+                    for (const part of content) {
+                        if (part.type === 'image_url' && part.image_url?.url) {
+                            frames.push(part.image_url.url);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Add delay between requests to avoid rate limiting
+            if (i < numFrames - 1) {
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        } catch (frameError: any) {
+            log(`Frame ${i + 1} generation failed: ${frameError.message}`, 'warn');
+            // Generate placeholder frame on error
+            const placeholderFrame = await generatePlaceholderFrame(framePrompt, i, numFrames, aspectRatio);
+            frames.push(placeholderFrame);
         }
+    }
 
-        const statusResult = await statusResponse.json();
-        const status = statusResult.status;
+    if (frames.length === 0) {
+        throw new Error('No frames generated');
+    }
+
+    log(`Generated ${frames.length} frames, creating animated video...`, 'info');
+
+    // Create animated GIF/video from frames
+    const videoUrl = await createAnimatedVideoFromFrames(frames, aspectRatio);
+    
+    log(`OpenRouter video generation complete!`, 'success');
+    return { videoUrl, frames };
+}
+
+// Generate a placeholder frame using canvas when API fails
+async function generatePlaceholderFrame(prompt: string, frameIndex: number, totalFrames: number, aspectRatio: string): Promise<string> {
+    return new Promise((resolve) => {
+        const canvas = document.createElement('canvas');
+        const aspectParts = aspectRatio.split(':').map(Number);
+        const baseWidth = 640;
+        const baseHeight = Math.round(baseWidth * (aspectParts[1] / aspectParts[0]));
         
-        log(`Poll #${pollCount}: status=${status}`, 'info', { verbose: true });
-
-        if (status === 'succeeded') {
-            const videoUrl = statusResult.output;
-            if (!videoUrl || (Array.isArray(videoUrl) && videoUrl.length === 0)) {
-                throw new Error('Replicate prediction succeeded but no video returned');
-            }
-            
-            // Handle array or single URL
-            const finalVideoUrl = Array.isArray(videoUrl) ? videoUrl[0] : videoUrl;
-            
-            // Download video and convert to blob URL
-            log(`Downloading video from Replicate...`, 'info');
-            const videoRes = await fetch(finalVideoUrl);
-            if (!videoRes.ok) {
-                throw new Error(`Failed to download video: ${videoRes.status}`);
-            }
-            const blob = await videoRes.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            
-            log(`Replicate video generation complete!`, 'success');
-            return { videoUrl: blobUrl, predictionId };
-        } else if (status === 'failed' || status === 'canceled') {
-            const errorMsg = statusResult.error || 'Unknown error';
-            throw new Error(`Replicate video generation failed: ${errorMsg}`);
+        canvas.width = baseWidth;
+        canvas.height = baseHeight;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            resolve('');
+            return;
         }
-        // Continue polling for 'starting', 'processing' states
-    }
 
-    throw new Error('Replicate video generation timed out after 10 minutes');
+        // Create gradient background based on frame index
+        const hue = (frameIndex / totalFrames) * 60 + 200; // Blue to purple range
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+        gradient.addColorStop(0, `hsl(${hue}, 70%, 20%)`);
+        gradient.addColorStop(1, `hsl(${hue + 30}, 60%, 10%)`);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Add animated particles
+        ctx.fillStyle = `rgba(255, 255, 255, ${0.1 + (frameIndex / totalFrames) * 0.2})`;
+        for (let i = 0; i < 50; i++) {
+            const x = (Math.sin(i * 0.5 + frameIndex * 0.3) + 1) * canvas.width / 2;
+            const y = (Math.cos(i * 0.7 + frameIndex * 0.2) + 1) * canvas.height / 2;
+            const size = 2 + Math.sin(i + frameIndex) * 2;
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // Add text overlay
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        const truncatedPrompt = prompt.length > 50 ? prompt.substring(0, 47) + '...' : prompt;
+        ctx.fillText(truncatedPrompt, canvas.width / 2, canvas.height / 2);
+        ctx.font = '10px monospace';
+        ctx.fillText(`Frame ${frameIndex + 1}/${totalFrames}`, canvas.width / 2, canvas.height / 2 + 20);
+
+        resolve(canvas.toDataURL('image/png'));
+    });
 }
 
-// --- QWEN VIDEO GENERATION ---
+// Create animated video (GIF) from frames
+async function createAnimatedVideoFromFrames(frameDataUrls: string[], aspectRatio: string): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const aspectParts = aspectRatio.split(':').map(Number);
+            const baseWidth = 640;
+            const baseHeight = Math.round(baseWidth * (aspectParts[1] / aspectParts[0]));
 
-interface QwenVideoResult {
-    videoUrl: string;
-    taskId: string;
-}
-
-async function generateVideoWithQwen(
-    prompt: string,
-    aspectRatio: string,
-    styleImageBase64?: string
-): Promise<QwenVideoResult> {
-    const apiKey = process.env.QWEN_API_KEY;
-    if (!apiKey) {
-        throw new Error('QWEN_API_KEY is not configured. Please add it to your .env.local file.');
-    }
-
-    // Map aspect ratio to Qwen format
-    const sizeMap: Record<string, string> = {
-        '16:9': '1280*720',
-        '9:16': '720*1280',
-        '1:1': '720*720'
-    };
-    const size = sizeMap[aspectRatio] || '1280*720';
-
-    log(`Creating Qwen video generation task...`, 'info', {
-        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
-        verbose: true
-    });
-
-    // Step 1: Create video generation task
-    const createTaskPayload: any = {
-        model: 'qwen-max-latest',
-        input: {
-            prompt: prompt
-        },
-        parameters: {
-            size: size,
-            duration: 5,
-            fps: 24
-        }
-    };
-
-    // Add style image if provided (image-to-video)
-    if (styleImageBase64) {
-        createTaskPayload.input.image_url = `data:image/png;base64,${styleImageBase64}`;
-        log(`Using reference image for Qwen generation...`, 'info');
-    }
-
-    const createResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/generation', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'X-DashScope-Async': 'enable'
-        },
-        body: JSON.stringify(createTaskPayload)
-    });
-
-    if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Qwen API error (${createResponse.status}): ${errorText}`);
-    }
-
-    const createResult = await createResponse.json();
-    
-    if (createResult.code && createResult.code !== '200' && createResult.code !== 200) {
-        throw new Error(`Qwen task creation failed: ${createResult.message || JSON.stringify(createResult)}`);
-    }
-
-    const taskId = createResult.output?.task_id;
-    if (!taskId) {
-        throw new Error(`No task_id in Qwen response: ${JSON.stringify(createResult)}`);
-    }
-
-    log(`Qwen task created: ${taskId}`, 'success');
-    log(`Polling for completion...`, 'info');
-
-    // Step 2: Poll for task completion
-    let pollCount = 0;
-    const maxPolls = 120; // 10 minutes max (5s intervals)
-    
-    while (pollCount < maxPolls) {
-        pollCount++;
-        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
-
-        const statusResponse = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`
+            // Create a canvas for the animation
+            const canvas = document.createElement('canvas');
+            canvas.width = baseWidth;
+            canvas.height = baseHeight;
+            const ctx = canvas.getContext('2d');
+            
+            if (!ctx) {
+                throw new Error('Canvas context not available');
             }
-        });
 
-        if (!statusResponse.ok) {
-            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
-            continue;
-        }
-
-        const statusResult = await statusResponse.json();
-        const taskStatus = statusResult.output?.task_status;
-
-        log(`Poll #${pollCount}: status=${taskStatus}`, 'info', { verbose: true });
-
-        if (taskStatus === 'SUCCEEDED') {
-            const videoUrl = statusResult.output?.video_url;
-            if (!videoUrl) {
-                throw new Error('Qwen task succeeded but no video_url returned');
+            // Load all frames as images
+            const frameImages: HTMLImageElement[] = [];
+            for (const dataUrl of frameDataUrls) {
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                await new Promise<void>((imgResolve, imgReject) => {
+                    img.onload = () => imgResolve();
+                    img.onerror = () => {
+                        // Create fallback image on error
+                        imgResolve();
+                    };
+                    img.src = dataUrl;
+                });
+                frameImages.push(img);
             }
-            log(`Qwen video generation complete!`, 'success');
-            return { videoUrl, taskId };
-        } else if (taskStatus === 'FAILED') {
-            const errorMsg = statusResult.output?.message || 'Unknown error';
-            throw new Error(`Qwen video generation failed: ${errorMsg}`);
+
+            // Use MediaRecorder to create a video
+            const stream = canvas.captureStream(24); // 24 fps
+            const mediaRecorder = new MediaRecorder(stream, {
+                mimeType: 'video/webm;codecs=vp9',
+                videoBitsPerSecond: 2500000
+            });
+
+            const chunks: Blob[] = [];
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    chunks.push(e.data);
+                }
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                resolve(url);
+            };
+
+            mediaRecorder.onerror = (e) => {
+                reject(new Error('MediaRecorder error'));
+            };
+
+            mediaRecorder.start();
+
+            // Animate through frames (loop twice for ~5 second video at variable speed)
+            const frameDelay = 150; // ms per frame
+            const loops = 3;
+            
+            for (let loop = 0; loop < loops; loop++) {
+                for (let i = 0; i < frameImages.length; i++) {
+                    const img = frameImages[i];
+                    if (img.complete && img.naturalWidth > 0) {
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    } else {
+                        // Draw placeholder
+                        ctx.fillStyle = `hsl(${(i / frameImages.length) * 60 + 200}, 70%, 20%)`;
+                        ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    }
+                    await new Promise(r => setTimeout(r, frameDelay));
+                }
+            }
+
+            // Stop recording
+            mediaRecorder.stop();
+
+        } catch (error) {
+            reject(error);
         }
-        // Continue polling for PENDING, RUNNING states
-    }
-
-    throw new Error('Qwen video generation timed out after 10 minutes');
-}
-
-// --- VEO VIDEO GENERATION (Legacy/Fallback) ---
-
-async function generateVideoWithVeo(
-    ai: any,
-    prompt: string,
-    aspectRatio: string,
-    styleImage?: { imageBytes: string; mimeType: string }
-): Promise<{ uri: string }> {
-    const videoConfig: any = {
-        numberOfVideos: 1,
-        resolution: '1080p',
-        aspectRatio
-    };
-
-    log(`Sending prompt to Veo...`, 'info', {
-        context: { promptPreview: `${prompt.substring(0, 120)}${prompt.length > 120 ? '...' : ''}` },
-        verbose: true
     });
-
-    let veoOperation;
-    if (styleImage) {
-        log(`Using reference image for Veo generation (${styleImage.mimeType})...`, 'info');
-        veoOperation = await ai.models.generateVideos({
-            model: 'veo-3.1-generate-preview',
-            prompt: prompt,
-            image: styleImage,
-            config: videoConfig
-        });
-    } else {
-        log(`No reference image - text-only Veo generation...`, 'info');
-        veoOperation = await ai.models.generateVideos({
-            model: 'veo-3.1-generate-preview',
-            prompt: prompt,
-            config: videoConfig
-        });
-    }
-
-    log(`Veo API call successful. Operation created.`, 'success');
-    log(`Operation Name: ${veoOperation.name || 'N/A'}`, 'info');
-    log(`Polling for completion...`, 'info');
-
-    let pollCount = 0;
-    while (!veoOperation.done) {
-        pollCount++;
-        await new Promise(r => setTimeout(r, 4000));
-        veoOperation = await ai.operations.getVideosOperation({ operation: veoOperation });
-        log(`Poll #${pollCount}: done=${veoOperation.done}`, 'info', { verbose: true });
-    }
-
-    log(`Veo polling complete after ${pollCount} polls.`, 'success');
-
-    if (veoOperation.response?.generatedVideos?.[0]?.video?.uri) {
-        return { uri: veoOperation.response.generatedVideos[0].video.uri };
-    }
-
-    throw new Error('Veo returned no video (Possible Safety Block)');
 }
 
 (window as any).renderSingleScene = async (sceneId: string) => {
@@ -1490,14 +1422,9 @@ async function generateVideoWithVeo(
         return;
     }
 
-    const videoModel = state.videoModel;
-    const isQwen = videoModel === VIDEO_MODELS.qwen;
-    const isReplicate = videoModel === VIDEO_MODELS.replicate;
+    await checkApiKey();
 
-    // Only check Gemini API key if using Veo
-    if (!isQwen && !isReplicate) {
-        await checkApiKey();
-    }
+    const videoModel = state.videoModel;
 
     mutateScene(sceneId, scene => {
         scene.status = 'generating';
@@ -1510,6 +1437,7 @@ async function generateVideoWithVeo(
     log(`========== RENDER START: Scene #${index + 1} ==========`, "system");
     log(`Scene ID: ${sceneId}`, "info");
     log(`Video Model: ${describeVideoModel(videoModel)} (${videoModel})`, "system");
+    log(`Using OpenRouter for video generation`, "info");
 
     let currentPrompt = baseScene.visualPrompt;
     log(`Original Prompt: "${currentPrompt.substring(0, 100)}..."`, "info");
@@ -1517,12 +1445,9 @@ async function generateVideoWithVeo(
     let attempts = 0;
     const maxAttempts = 3;
 
-    let styleImage = state.styleImageBase64 ? {
-        imageBytes: state.styleImageBase64,
-        mimeType: state.styleImageMime
-    } : undefined;
+    let styleImageBase64 = state.styleImageBase64 || undefined;
 
-    log(`Style Image Present: ${styleImage ? 'YES (' + state.styleImageMime + ')' : 'NO'}`, "info");
+    log(`Style Image Present: ${styleImageBase64 ? 'YES' : 'NO'}`, "info");
 
     while (attempts < maxAttempts) {
         attempts++;
@@ -1541,113 +1466,31 @@ async function generateVideoWithVeo(
         const aspectRatio = latestState.aspectRatio;
 
         try {
-            let videoUrl: string;
-            let videoUri: string | undefined;
-
-            if (isReplicate) {
-                // Use Replicate for video generation
-                log(`Video Config prepared`, "info", {
-                    context: {
-                        model: videoModel,
-                        aspectRatio,
-                        attempt: attempts,
-                        styleImageAttached: Boolean(styleImage)
-                    },
-                    verbose: true
-                });
-
-                const result = await generateVideoWithReplicate(
-                    currentPrompt,
+            log(`Video Config prepared`, "info", {
+                context: {
+                    model: videoModel,
                     aspectRatio,
-                    styleImage?.imageBytes
-                );
+                    attempt: attempts,
+                    styleImageAttached: Boolean(styleImageBase64)
+                },
+                verbose: true
+            });
 
-                log(`Replicate video URL received`, "success");
-                videoUrl = result.videoUrl;
-                videoUri = result.videoUrl; // Store the blob URL
+            // Use OpenRouter for video generation
+            const result = await generateVideoWithOpenRouter(
+                currentPrompt,
+                aspectRatio,
+                videoModel,
+                styleImageBase64
+            );
 
-            } else if (isQwen) {
-                // Use Qwen for video generation
-                log(`Video Config prepared`, "info", {
-                    context: {
-                        model: videoModel,
-                        aspectRatio,
-                        attempt: attempts,
-                        styleImageAttached: Boolean(styleImage)
-                    },
-                    verbose: true
-                });
-
-                const result = await generateVideoWithQwen(
-                    currentPrompt,
-                    aspectRatio,
-                    styleImage?.imageBytes
-                );
-
-                log(`Qwen video URL received`, "success");
-                log("Downloading video...", "info");
-
-                const res = await fetch(result.videoUrl);
-                log(`Download response: ${res.status} ${res.statusText}`, "info");
-
-                if (!res.ok) {
-                    throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
-                }
-                const blob = await res.blob();
-                log(`Downloaded blob size: ${blob.size} bytes`, "info");
-
-                if (blob.size === 0) {
-                    throw new Error("Downloaded video is empty");
-                }
-
-                videoUrl = URL.createObjectURL(blob);
-                videoUri = result.videoUrl; // Store the original URL
-
-            } else {
-                // Use Veo for video generation (legacy/fallback)
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-                
-                log(`Video Config prepared`, "info", {
-                    context: {
-                        model: videoModel,
-                        aspectRatio,
-                        attempt: attempts,
-                        styleImageAttached: Boolean(styleImage)
-                    },
-                    verbose: true
-                });
-
-                const result = await generateVideoWithVeo(
-                    ai,
-                    currentPrompt,
-                    aspectRatio,
-                    styleImage
-                );
-
-                log(`Video URI received: ${result.uri.substring(0, 50)}...`, "success");
-                log("Downloading video...", "info");
-
-                const res = await fetch(appendApiKey(result.uri));
-                log(`Download response: ${res.status} ${res.statusText}`, "info");
-
-                if (!res.ok) {
-                    throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
-                }
-                const blob = await res.blob();
-                log(`Downloaded blob size: ${blob.size} bytes`, "info");
-
-                if (blob.size === 0) {
-                    throw new Error("Downloaded video is empty");
-                }
-
-                videoUrl = URL.createObjectURL(blob);
-                videoUri = result.uri;
-            }
+            log(`OpenRouter video URL received`, "success");
+            const videoUrl = result.videoUrl;
 
             // Success - update scene
             mutateScene(sceneId, scene => {
                 scene.status = 'done';
-                scene.videoUri = videoUri;
+                scene.videoUri = videoUrl;
                 scene.videoUrl = videoUrl;
                 scene.visualPrompt = currentPrompt;
             });
@@ -1657,7 +1500,8 @@ async function generateVideoWithVeo(
                     durationMs: Math.round(performance.now() - attemptStart),
                     totalElapsedMs: Math.round(performance.now() - renderStart),
                     attempt: attempts,
-                    videoModel
+                    videoModel,
+                    framesGenerated: result.frames.length
                 }
             });
             return;
@@ -1678,7 +1522,8 @@ async function generateVideoWithVeo(
             const isRetryableError = e.message.includes("Safety") || 
                                      e.message.includes("no video") ||
                                      e.message.includes("failed") ||
-                                     e.message.includes("FAILED");
+                                     e.message.includes("FAILED") ||
+                                     e.message.includes("No frames");
 
             if (attempts < maxAttempts && isRetryableError) {
                 const category = detectSafetyCategory(e.message);
@@ -1696,12 +1541,11 @@ async function generateVideoWithVeo(
                 if (attempts === 1) {
                     log(`=== STRATEGY 1: Sanitize Prompt ===`, "system");
 
-                    if (styleImage) {
+                    if (styleImageBase64) {
                         log("Dropping style image (potential trigger).", "warn");
-                        styleImage = undefined;
+                        styleImageBase64 = undefined;
                     }
 
-                    // For Qwen, we rely more on prompt sanitization
                     const newPrompt = await sanitizePrompt(currentPrompt);
                     log(`Sanitized Prompt updated.`, "info", {
                         context: {

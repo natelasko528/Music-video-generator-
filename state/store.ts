@@ -1,15 +1,22 @@
 const STORAGE_KEY = 'music-video-project';
-const STATE_VERSION = 2;
+const STATE_VERSION = 3;
 
+// OpenRouter planner models - one API key, many models
 export const PLANNER_MODELS = {
-  default: 'gemini-3-pro-preview',
-  fast: 'gemini-2.0-nano-banana',
+  default: 'google/gemini-2.5-flash',
+  pro: 'google/gemini-2.5-pro',
+  claude: 'anthropic/claude-sonnet-4',
+  gpt: 'openai/gpt-4o',
 } as const;
 
+// OpenRouter video/image models for video generation
+// Note: OpenRouter provides image generation which we use frame-by-frame
+// Some models also support native video understanding
 export const VIDEO_MODELS = {
-  qwen: 'qwen-max-latest',
-  veo: 'veo-3.1-generate-preview',
-  replicate: 'replicate-animate-diff',
+  geminiFlash: 'google/gemini-2.5-flash-image',
+  geminiPro: 'google/gemini-3-pro-image-preview',
+  gptImage: 'openai/gpt-5-image',
+  gptImageMini: 'openai/gpt-5-image-mini',
 } as const;
 
 export type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
@@ -59,7 +66,7 @@ const DEFAULT_STATE: ProjectState = {
   audioDuration: 0,
   transitionType: 'cut',
   plannerModel: PLANNER_MODELS.default,
-  videoModel: VIDEO_MODELS.replicate,
+  videoModel: VIDEO_MODELS.geminiFlash,
   activeTab: 'setup',
   lastSavedAt: null,
   version: STATE_VERSION,
@@ -117,19 +124,22 @@ export function validatePlannerModel(modelId: string): PlannerModelId {
 }
 
 export function describePlannerModel(modelId: PlannerModelId): string {
-  if (modelId === PLANNER_MODELS.fast) return 'Gemini Nano Banana (Fast)';
-  return 'Gemini 3 Pro Preview (Default)';
+  if (modelId === PLANNER_MODELS.pro) return 'Gemini 2.5 Pro (Best)';
+  if (modelId === PLANNER_MODELS.claude) return 'Claude Sonnet 4';
+  if (modelId === PLANNER_MODELS.gpt) return 'GPT-4o';
+  return 'Gemini 2.5 Flash (Fast)';
 }
 
 export function validateVideoModel(modelId: string): VideoModelId {
   const allowed = Object.values(VIDEO_MODELS) as string[];
-  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS.qwen;
+  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS.geminiFlash;
 }
 
 export function describeVideoModel(modelId: VideoModelId): string {
-  if (modelId === VIDEO_MODELS.veo) return 'Veo 3.1 (Google)';
-  if (modelId === VIDEO_MODELS.replicate) return 'AnimateDiff (Replicate - Free)';
-  return 'Qwen Max (Default)';
+  if (modelId === VIDEO_MODELS.geminiPro) return 'Gemini 3 Pro Image (Best)';
+  if (modelId === VIDEO_MODELS.gptImage) return 'GPT-5 Image';
+  if (modelId === VIDEO_MODELS.gptImageMini) return 'GPT-5 Image Mini (Fast)';
+  return 'Gemini 2.5 Flash Image (Default)';
 }
 
 function notify(next: ProjectState, prev: ProjectState) {

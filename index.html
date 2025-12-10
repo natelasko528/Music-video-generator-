@@ -79,7 +79,7 @@
             </div>
             <div>
               <h1 class="text-lg font-bold text-white tracking-tight">Director's Cut</h1>
-              <p class="text-[10px] text-gray-500 font-mono">Gemini 3.0 + Qwen Max</p>
+              <p class="text-[10px] text-gray-500 font-mono">Powered by OpenRouter</p>
             </div>
           </div>
 
@@ -226,13 +226,14 @@
 
               <!-- Video Model -->
               <div>
-                <label class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Video Model</label>
+                <label class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Video Model (OpenRouter)</label>
                 <select id="video-model" class="w-full bg-cyber-800 border border-gray-700/50 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-neon-purple/50 focus:ring-1 focus:ring-neon-purple/20 transition-all">
-                  <option value="replicate-animate-diff">AnimateDiff (Replicate - Free)</option>
-                  <option value="qwen-max-latest">Qwen Max</option>
-                  <option value="veo-3.1-generate-preview">Veo 3.1 (Google)</option>
+                  <option value="google/gemini-2.5-flash-image">Gemini 2.5 Flash Image (Fast)</option>
+                  <option value="google/gemini-3-pro-image-preview">Gemini 3 Pro Image (Best)</option>
+                  <option value="openai/gpt-5-image">GPT-5 Image</option>
+                  <option value="openai/gpt-5-image-mini">GPT-5 Image Mini (Fast)</option>
                 </select>
-                <p class="text-[10px] text-gray-600 mt-1">AnimateDiff via Replicate is the recommended free model for video generation.</p>
+                <p class="text-[10px] text-gray-600 mt-1">All models powered by OpenRouter. Uses frame-by-frame image generation for video creation.</p>
               </div>
             </div>
           </div>
@@ -282,12 +283,14 @@
             <textarea id="prompt-input" class="w-full bg-cyber-800/50 border border-gray-700/50 rounded-xl p-3 text-sm text-gray-300 placeholder-gray-600 focus:outline-none focus:border-neon-blue/50 focus:ring-1 focus:ring-neon-blue/20 font-mono resize-none h-32 transition-all" placeholder="Paste lyrics or describe the visual style you want..."></textarea>
 
             <label class="block mt-4">
-              <span class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Planner Model</span>
+              <span class="block text-[10px] text-gray-500 mb-1.5 uppercase tracking-wider">Planner Model (OpenRouter)</span>
               <select id="planner-model" class="w-full bg-cyber-800/50 border border-gray-700/50 rounded-xl p-3 text-sm text-gray-300 focus:outline-none focus:border-neon-purple/50 focus:ring-1 focus:ring-neon-purple/20">
-                <option value="gemini-3-pro-preview">Gemini 3 Pro Preview (Default)</option>
-                <option value="gemini-2.0-nano-banana">Gemini 2 Nano Banana (Fast)</option>
+                <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (Fast)</option>
+                <option value="google/gemini-2.5-pro">Gemini 2.5 Pro (Best)</option>
+                <option value="anthropic/claude-sonnet-4">Claude Sonnet 4</option>
+                <option value="openai/gpt-4o">GPT-4o</option>
               </select>
-              <p class="text-[10px] text-gray-600 mt-1">Stored with the project so re-plans reuse the same model.</p>
+              <p class="text-[10px] text-gray-600 mt-1">All models via OpenRouter - one API key for all.</p>
             </label>
 
             <button id="plan-button" class="mt-4 w-full relative overflow-hidden group">
