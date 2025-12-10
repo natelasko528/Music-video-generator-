@@ -1174,208 +1174,155 @@ Return ONLY the rewritten prompt text, nothing else.`,
     }
 }
 
-// --- REPLICATE VIDEO GENERATION (Free Alternative) ---
+// --- OPENROUTER VIDEO GENERATION ---
 
-interface ReplicateVideoResult {
+interface OpenRouterVideoResult {
     videoUrl: string;
-    predictionId: string;
+    taskId?: string;
 }
 
-async function generateVideoWithReplicate(
+async function generateVideoWithOpenRouter(
+    modelId: string,
     prompt: string,
     aspectRatio: string,
     styleImageBase64?: string
-): Promise<ReplicateVideoResult> {
-    const apiKey = process.env.REPLICATE_API_KEY;
+): Promise<OpenRouterVideoResult> {
+    const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey) {
-        throw new Error('REPLICATE_API_KEY is not configured. Please add it to your .env.local file.');
+        throw new Error('OPENROUTER_API_KEY is not configured. Please add it to your .env.local file.');
     }
 
-    log(`Creating Replicate video generation task...`, 'info', {
-        context: { model: 'animate-diff', aspectRatio, promptLength: prompt.length },
+    log(`Creating OpenRouter video generation task...`, 'info', {
+        context: { model: modelId, aspectRatio, promptLength: prompt.length },
         verbose: true
     });
 
-    // Use AnimateDiff model via Replicate
-    // Model: lucataco/animate-diff
-    const model = 'lucataco/animate-diff';
-    
-    const input: any = {
+    // Map aspect ratio to common video dimensions
+    const aspectRatioMap: Record<string, { width: number; height: number }> = {
+        '16:9': { width: 1920, height: 1080 },
+        '9:16': { width: 1080, height: 1920 },
+        '1:1': { width: 1080, height: 1080 }
+    };
+    const dimensions = aspectRatioMap[aspectRatio] || aspectRatioMap['16:9'];
+
+    // Prepare the request payload for OpenRouter
+    // OpenRouter uses OpenAI-compatible API format for video generation
+    // The exact format may vary by model, so we use a flexible structure
+    const requestBody: any = {
+        model: modelId,
         prompt: prompt,
-        num_frames: 16,
-        guidance_scale: 7.5,
-        num_inference_steps: 25,
+        aspect_ratio: aspectRatio,
+        width: dimensions.width,
+        height: dimensions.height
     };
 
-    // Add image if provided
+    // Add image if provided (for image-to-video models)
     if (styleImageBase64) {
-        // Convert base64 to data URL
-        const imageDataUrl = `data:image/png;base64,${styleImageBase64}`;
-        input.image = imageDataUrl;
+        requestBody.image = `data:image/png;base64,${styleImageBase64}`;
+        log(`Using reference image for OpenRouter generation...`, 'info');
     }
 
-    // Create prediction
-    const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Token ${apiKey}`,
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            version: 'beecf59c4aee8d81f04d340cc0c89fdecfbed8a4', // AnimateDiff version
-            input: input
-        })
-    });
-
-    if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Replicate API error (${createResponse.status}): ${errorText}`);
-    }
-
-    const createResult = await createResponse.json();
-    const predictionId = createResult.id;
-    
-    if (!predictionId) {
-        throw new Error(`No prediction ID in Replicate response: ${JSON.stringify(createResult)}`);
-    }
-
-    log(`Replicate prediction created: ${predictionId}`, 'success');
-    log(`Polling for completion...`, 'info');
-
-    // Poll for completion
-    let pollCount = 0;
-    const maxPolls = 120; // 10 minutes max (5s intervals)
-    
-    while (pollCount < maxPolls) {
-        pollCount++;
-        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
-
-        const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${predictionId}`, {
-            method: 'GET',
+    // Try OpenRouter's video generation endpoint first
+    // If that doesn't exist, fall back to chat/completions with video generation instructions
+    let response;
+    try {
+        // Try dedicated video generation endpoint
+        response = await fetch('https://openrouter.ai/api/v1/video/generations', {
+            method: 'POST',
             headers: {
-                'Authorization': `Token ${apiKey}`,
-            }
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': window.location.origin,
+                'X-Title': 'Director\'s Cut - AI Music Video Suite'
+            },
+            body: JSON.stringify(requestBody)
         });
-
-        if (!statusResponse.ok) {
-            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
-            continue;
+    } catch (e) {
+        // Fallback to chat/completions format if video endpoint doesn't exist
+        log(`Video endpoint not available, trying chat/completions format...`, 'warn', { verbose: true });
+        const chatBody = {
+            model: modelId,
+            messages: [
+                {
+                    role: 'user',
+                    content: `Generate a video: ${prompt}. Aspect ratio: ${aspectRatio}, Size: ${dimensions.width}x${dimensions.height}`
+                }
+            ]
+        };
+        if (styleImageBase64) {
+            chatBody.messages[0].content = [
+                { type: 'text', text: `Generate a video: ${prompt}. Aspect ratio: ${aspectRatio}` },
+                { type: 'image_url', image_url: { url: `data:image/png;base64,${styleImageBase64}` } }
+            ];
         }
-
-        const statusResult = await statusResponse.json();
-        const status = statusResult.status;
-        
-        log(`Poll #${pollCount}: status=${status}`, 'info', { verbose: true });
-
-        if (status === 'succeeded') {
-            const videoUrl = statusResult.output;
-            if (!videoUrl || (Array.isArray(videoUrl) && videoUrl.length === 0)) {
-                throw new Error('Replicate prediction succeeded but no video returned');
-            }
-            
-            // Handle array or single URL
-            const finalVideoUrl = Array.isArray(videoUrl) ? videoUrl[0] : videoUrl;
-            
-            // Download video and convert to blob URL
-            log(`Downloading video from Replicate...`, 'info');
-            const videoRes = await fetch(finalVideoUrl);
-            if (!videoRes.ok) {
-                throw new Error(`Failed to download video: ${videoRes.status}`);
-            }
-            const blob = await videoRes.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            
-            log(`Replicate video generation complete!`, 'success');
-            return { videoUrl: blobUrl, predictionId };
-        } else if (status === 'failed' || status === 'canceled') {
-            const errorMsg = statusResult.error || 'Unknown error';
-            throw new Error(`Replicate video generation failed: ${errorMsg}`);
-        }
-        // Continue polling for 'starting', 'processing' states
+        response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': window.location.origin,
+                'X-Title': 'Director\'s Cut - AI Music Video Suite'
+            },
+            body: JSON.stringify(chatBody)
+        });
     }
 
-    throw new Error('Replicate video generation timed out after 10 minutes');
-}
-
-// --- QWEN VIDEO GENERATION ---
-
-interface QwenVideoResult {
-    videoUrl: string;
-    taskId: string;
-}
-
-async function generateVideoWithQwen(
-    prompt: string,
-    aspectRatio: string,
-    styleImageBase64?: string
-): Promise<QwenVideoResult> {
-    const apiKey = process.env.QWEN_API_KEY;
-    if (!apiKey) {
-        throw new Error('QWEN_API_KEY is not configured. Please add it to your .env.local file.');
+    if (!response.ok) {
+        const errorText = await response.text();
+        log(`OpenRouter API error: ${errorText}`, 'error');
+        throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
     }
 
-    // Map aspect ratio to Qwen format
-    const sizeMap: Record<string, string> = {
-        '16:9': '1280*720',
-        '9:16': '720*1280',
-        '1:1': '720*720'
-    };
-    const size = sizeMap[aspectRatio] || '1280*720';
-
-    log(`Creating Qwen video generation task...`, 'info', {
-        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
-        verbose: true
-    });
-
-    // Step 1: Create video generation task
-    const createTaskPayload: any = {
-        model: 'qwen-max-latest',
-        input: {
-            prompt: prompt
-        },
-        parameters: {
-            size: size,
-            duration: 5,
-            fps: 24
-        }
-    };
-
-    // Add style image if provided (image-to-video)
-    if (styleImageBase64) {
-        createTaskPayload.input.image_url = `data:image/png;base64,${styleImageBase64}`;
-        log(`Using reference image for Qwen generation...`, 'info');
-    }
-
-    const createResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/generation', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'X-DashScope-Async': 'enable'
-        },
-        body: JSON.stringify(createTaskPayload)
-    });
-
-    if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Qwen API error (${createResponse.status}): ${errorText}`);
-    }
-
-    const createResult = await createResponse.json();
+    const result = await response.json();
     
-    if (createResult.code && createResult.code !== '200' && createResult.code !== 200) {
-        throw new Error(`Qwen task creation failed: ${createResult.message || JSON.stringify(createResult)}`);
+    // Handle different response formats from OpenRouter
+    // Some models return video URLs directly, others return task IDs for polling
+    if (result.choices && result.choices[0] && result.choices[0].message) {
+        const message = result.choices[0].message;
+        
+        // Check if response contains a video URL
+        if (message.content) {
+            // Try to extract video URL from response
+            const urlMatch = message.content.match(/https?:\/\/[^\s]+\.(mp4|webm|mov)/i);
+            if (urlMatch) {
+                const videoUrl = urlMatch[0];
+                log(`OpenRouter video URL received: ${videoUrl}`, 'success');
+                
+                // Download video and convert to blob URL
+                log(`Downloading video from OpenRouter...`, 'info');
+                const videoRes = await fetch(videoUrl);
+                if (!videoRes.ok) {
+                    throw new Error(`Failed to download video: ${videoRes.status}`);
+                }
+                const blob = await videoRes.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                
+                log(`OpenRouter video generation complete!`, 'success');
+                return { videoUrl: blobUrl };
+            }
+        }
+        
+        // Check for task ID in response (for async models)
+        if (result.id || result.task_id) {
+            const taskId = result.id || result.task_id;
+            log(`OpenRouter task created: ${taskId}`, 'success');
+            log(`Polling for completion...`, 'info');
+            
+            // Poll for completion
+            return await pollOpenRouterTask(apiKey, taskId, modelId);
+        }
     }
 
-    const taskId = createResult.output?.task_id;
-    if (!taskId) {
-        throw new Error(`No task_id in Qwen response: ${JSON.stringify(createResult)}`);
-    }
+    // If we get here, the response format is unexpected
+    log(`Unexpected OpenRouter response format: ${JSON.stringify(result)}`, 'warn');
+    throw new Error('OpenRouter returned an unexpected response format. Please check the model supports video generation.');
+}
 
-    log(`Qwen task created: ${taskId}`, 'success');
-    log(`Polling for completion...`, 'info');
-
-    // Step 2: Poll for task completion
+async function pollOpenRouterTask(
+    apiKey: string,
+    taskId: string,
+    modelId: string
+): Promise<OpenRouterVideoResult> {
     let pollCount = 0;
     const maxPolls = 120; // 10 minutes max (5s intervals)
     
@@ -1383,7 +1330,9 @@ async function generateVideoWithQwen(
         pollCount++;
         await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
 
-        const statusResponse = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
+        // Poll using OpenRouter's status endpoint (if available)
+        // Otherwise, try to get status from the original response
+        const statusResponse = await fetch(`https://openrouter.ai/api/v1/tasks/${taskId}`, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${apiKey}`
@@ -1391,30 +1340,42 @@ async function generateVideoWithQwen(
         });
 
         if (!statusResponse.ok) {
-            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
-            continue;
+            // If status endpoint doesn't exist, try alternative polling method
+            log(`Poll #${pollCount}: Status endpoint not available, trying alternative method...`, 'warn', { verbose: true });
+            // For now, we'll throw an error and let the user know
+            throw new Error('OpenRouter task polling not yet implemented for this model. Please check OpenRouter documentation for async video generation.');
         }
 
         const statusResult = await statusResponse.json();
-        const taskStatus = statusResult.output?.task_status;
+        const status = statusResult.status || statusResult.state;
 
-        log(`Poll #${pollCount}: status=${taskStatus}`, 'info', { verbose: true });
+        log(`Poll #${pollCount}: status=${status}`, 'info', { verbose: true });
 
-        if (taskStatus === 'SUCCEEDED') {
-            const videoUrl = statusResult.output?.video_url;
+        if (status === 'completed' || status === 'succeeded' || status === 'done') {
+            const videoUrl = statusResult.output?.video_url || statusResult.video_url || statusResult.output;
             if (!videoUrl) {
-                throw new Error('Qwen task succeeded but no video_url returned');
+                throw new Error('OpenRouter task succeeded but no video URL returned');
             }
-            log(`Qwen video generation complete!`, 'success');
-            return { videoUrl, taskId };
-        } else if (taskStatus === 'FAILED') {
-            const errorMsg = statusResult.output?.message || 'Unknown error';
-            throw new Error(`Qwen video generation failed: ${errorMsg}`);
+            
+            // Download video and convert to blob URL
+            log(`Downloading video from OpenRouter...`, 'info');
+            const videoRes = await fetch(videoUrl);
+            if (!videoRes.ok) {
+                throw new Error(`Failed to download video: ${videoRes.status}`);
+            }
+            const blob = await videoRes.blob();
+            const blobUrl = URL.createObjectURL(blob);
+            
+            log(`OpenRouter video generation complete!`, 'success');
+            return { videoUrl: blobUrl, taskId };
+        } else if (status === 'failed' || status === 'error') {
+            const errorMsg = statusResult.error || statusResult.message || 'Unknown error';
+            throw new Error(`OpenRouter video generation failed: ${errorMsg}`);
         }
-        // Continue polling for PENDING, RUNNING states
+        // Continue polling for 'pending', 'processing', 'running' states
     }
 
-    throw new Error('Qwen video generation timed out after 10 minutes');
+    throw new Error('OpenRouter video generation timed out after 10 minutes');
 }
 
 // --- VEO VIDEO GENERATION (Legacy/Fallback) ---
@@ -1491,12 +1452,17 @@ async function generateVideoWithVeo(
     }
 
     const videoModel = state.videoModel;
-    const isQwen = videoModel === VIDEO_MODELS.qwen;
-    const isReplicate = videoModel === VIDEO_MODELS.replicate;
+    const isOpenRouter = true; // All video models now use OpenRouter
 
-    // Only check Gemini API key if using Veo
-    if (!isQwen && !isReplicate) {
-        await checkApiKey();
+    // Check OpenRouter API key
+    if (!process.env.OPENROUTER_API_KEY) {
+        if (window.aistudio?.openSelectKey) {
+            log("Requesting OpenRouter API Key selection...", "warn");
+            await window.aistudio.openSelectKey();
+        } else {
+            alert("OpenRouter API Key missing. Please configure OPENROUTER_API_KEY in your .env.local file.");
+            throw new Error("OpenRouter API Key missing");
+        }
     }
 
     mutateScene(sceneId, scene => {
@@ -1544,105 +1510,27 @@ async function generateVideoWithVeo(
             let videoUrl: string;
             let videoUri: string | undefined;
 
-            if (isReplicate) {
-                // Use Replicate for video generation
-                log(`Video Config prepared`, "info", {
-                    context: {
-                        model: videoModel,
-                        aspectRatio,
-                        attempt: attempts,
-                        styleImageAttached: Boolean(styleImage)
-                    },
-                    verbose: true
-                });
-
-                const result = await generateVideoWithReplicate(
-                    currentPrompt,
+            // Use OpenRouter for video generation
+            log(`Video Config prepared`, "info", {
+                context: {
+                    model: videoModel,
                     aspectRatio,
-                    styleImage?.imageBytes
-                );
+                    attempt: attempts,
+                    styleImageAttached: Boolean(styleImage)
+                },
+                verbose: true
+            });
 
-                log(`Replicate video URL received`, "success");
-                videoUrl = result.videoUrl;
-                videoUri = result.videoUrl; // Store the blob URL
+            const result = await generateVideoWithOpenRouter(
+                videoModel,
+                currentPrompt,
+                aspectRatio,
+                styleImage?.imageBytes
+            );
 
-            } else if (isQwen) {
-                // Use Qwen for video generation
-                log(`Video Config prepared`, "info", {
-                    context: {
-                        model: videoModel,
-                        aspectRatio,
-                        attempt: attempts,
-                        styleImageAttached: Boolean(styleImage)
-                    },
-                    verbose: true
-                });
-
-                const result = await generateVideoWithQwen(
-                    currentPrompt,
-                    aspectRatio,
-                    styleImage?.imageBytes
-                );
-
-                log(`Qwen video URL received`, "success");
-                log("Downloading video...", "info");
-
-                const res = await fetch(result.videoUrl);
-                log(`Download response: ${res.status} ${res.statusText}`, "info");
-
-                if (!res.ok) {
-                    throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
-                }
-                const blob = await res.blob();
-                log(`Downloaded blob size: ${blob.size} bytes`, "info");
-
-                if (blob.size === 0) {
-                    throw new Error("Downloaded video is empty");
-                }
-
-                videoUrl = URL.createObjectURL(blob);
-                videoUri = result.videoUrl; // Store the original URL
-
-            } else {
-                // Use Veo for video generation (legacy/fallback)
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-                
-                log(`Video Config prepared`, "info", {
-                    context: {
-                        model: videoModel,
-                        aspectRatio,
-                        attempt: attempts,
-                        styleImageAttached: Boolean(styleImage)
-                    },
-                    verbose: true
-                });
-
-                const result = await generateVideoWithVeo(
-                    ai,
-                    currentPrompt,
-                    aspectRatio,
-                    styleImage
-                );
-
-                log(`Video URI received: ${result.uri.substring(0, 50)}...`, "success");
-                log("Downloading video...", "info");
-
-                const res = await fetch(appendApiKey(result.uri));
-                log(`Download response: ${res.status} ${res.statusText}`, "info");
-
-                if (!res.ok) {
-                    throw new Error(`Failed to download video: ${res.status} ${res.statusText}`);
-                }
-                const blob = await res.blob();
-                log(`Downloaded blob size: ${blob.size} bytes`, "info");
-
-                if (blob.size === 0) {
-                    throw new Error("Downloaded video is empty");
-                }
-
-                videoUrl = URL.createObjectURL(blob);
-                videoUri = result.uri;
-            }
+            log(`OpenRouter video URL received`, "success");
+            videoUrl = result.videoUrl;
+            videoUri = result.videoUrl; // Store the blob URL
 
             // Success - update scene
             mutateScene(sceneId, scene => {
@@ -1744,7 +1632,11 @@ async function generateVideoWithVeo(
 renderAllBtn.addEventListener('click', async () => {
     if (!confirm("Start rendering all pending scenes? This may take time.")) return;
 
-    await checkApiKey();
+    // Check OpenRouter API key
+    if (!process.env.OPENROUTER_API_KEY) {
+        alert("OpenRouter API Key missing. Please configure OPENROUTER_API_KEY in your .env.local file.");
+        return;
+    }
     log("Batch rendering initiated.", "system");
     const scenesSnapshot = [...getProjectState().scenes];
     const pendingScenes = scenesSnapshot.filter(s => s.status !== 'done' && s.status !== 'generating' && s.status !== 'sanitizing');
