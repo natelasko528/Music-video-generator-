@@ -6,14 +6,18 @@ export const PLANNER_MODELS = {
   fast: 'gemini-2.0-nano-banana',
 } as const;
 
+// OpenRouter video generation models
+// These are dynamically fetched, but we provide common ones as defaults
 export const VIDEO_MODELS = {
-  qwen: 'qwen-max-latest',
-  veo: 'veo-3.1-generate-preview',
-  replicate: 'replicate-animate-diff',
+  'runway/gen3-alpha-turbo': 'runway/gen3-alpha-turbo',
+  'runway/gen3-alpha': 'runway/gen3-alpha',
+  'pika/pika-1.5': 'pika/pika-1.5',
+  'kling/kling-v1': 'kling/kling-v1',
+  'luma/dream-machine': 'luma/dream-machine',
 } as const;
 
 export type PlannerModelId = typeof PLANNER_MODELS[keyof typeof PLANNER_MODELS];
-export type VideoModelId = typeof VIDEO_MODELS[keyof typeof VIDEO_MODELS];
+export type VideoModelId = string; // OpenRouter supports many video models dynamically
 export type TransitionType = 'cut' | 'crossfade' | 'fadeblack';
 export type SceneStatus = 'pending' | 'generating' | 'done' | 'error' | 'sanitizing';
 export type ActiveTab = 'setup' | 'timeline' | 'preview';
@@ -59,7 +63,7 @@ const DEFAULT_STATE: ProjectState = {
   audioDuration: 0,
   transitionType: 'cut',
   plannerModel: PLANNER_MODELS.default,
-  videoModel: VIDEO_MODELS.replicate,
+  videoModel: 'runway/gen3-alpha-turbo',
   activeTab: 'setup',
   lastSavedAt: null,
   version: STATE_VERSION,
@@ -122,14 +126,23 @@ export function describePlannerModel(modelId: PlannerModelId): string {
 }
 
 export function validateVideoModel(modelId: string): VideoModelId {
-  const allowed = Object.values(VIDEO_MODELS) as string[];
-  return allowed.includes(modelId) ? (modelId as VideoModelId) : VIDEO_MODELS.qwen;
+  // Allow any string as OpenRouter supports many video models
+  // Default to a common one if invalid
+  if (!modelId || typeof modelId !== 'string') {
+    return 'runway/gen3-alpha-turbo' as VideoModelId;
+  }
+  return modelId as VideoModelId;
 }
 
 export function describeVideoModel(modelId: VideoModelId): string {
-  if (modelId === VIDEO_MODELS.veo) return 'Veo 3.1 (Google)';
-  if (modelId === VIDEO_MODELS.replicate) return 'AnimateDiff (Replicate - Free)';
-  return 'Qwen Max (Default)';
+  const modelNames: Record<string, string> = {
+    'runway/gen3-alpha-turbo': 'Runway Gen-3 Alpha Turbo',
+    'runway/gen3-alpha': 'Runway Gen-3 Alpha',
+    'pika/pika-1.5': 'Pika 1.5',
+    'kling/kling-v1': 'Kling AI v1',
+    'luma/dream-machine': 'Luma Dream Machine',
+  };
+  return modelNames[modelId] || modelId;
 }
 
 function notify(next: ProjectState, prev: ProjectState) {
