@@ -1186,6 +1186,7 @@ async function generateVideoWithQwen(
     aspectRatio: string,
     styleImageBase64?: string
 ): Promise<QwenVideoResult> {
+    const qwenVideoModel = VIDEO_MODELS.qwen;
     const apiKey = process.env.QWEN_API_KEY;
     if (!apiKey) {
         throw new Error('QWEN_API_KEY is not configured. Please add it to your .env.local file.');
@@ -1200,13 +1201,13 @@ async function generateVideoWithQwen(
     const size = sizeMap[aspectRatio] || '1280*720';
 
     log(`Creating Qwen video generation task...`, 'info', {
-        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
+        context: { model: qwenVideoModel, size, promptLength: prompt.length },
         verbose: true
     });
 
     // Step 1: Create video generation task
     const createTaskPayload: any = {
-        model: 'qwen-max-latest',
+        model: qwenVideoModel,
         input: {
             prompt: prompt
         },
