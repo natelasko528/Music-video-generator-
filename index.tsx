@@ -1191,7 +1191,7 @@ async function generateVideoWithQwen(
         throw new Error('QWEN_API_KEY is not configured. Please add it to your .env.local file.');
     }
 
-    // Map aspect ratio to Qwen format
+    // Map aspect ratio to Qwen format (width*height)
     const sizeMap: Record<string, string> = {
         '16:9': '1280*720',
         '9:16': '720*1280',
@@ -1199,12 +1199,19 @@ async function generateVideoWithQwen(
     };
     const size = sizeMap[aspectRatio] || '1280*720';
 
+    const apiStart = performance.now();
     log(`Creating Qwen video generation task...`, 'info', {
-        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
+        context: { 
+            model: 'qwen-max-latest', 
+            size, 
+            promptLength: prompt.length,
+            hasImage: Boolean(styleImageBase64)
+        },
         verbose: true
     });
 
     // Step 1: Create video generation task
+    // DashScope API format: https://help.aliyun.com/zh/model-studio/developer-reference/api-details-9
     const createTaskPayload: any = {
         model: 'qwen-max-latest',
         input: {
@@ -1212,86 +1219,142 @@ async function generateVideoWithQwen(
         },
         parameters: {
             size: size,
-            duration: 5,
-            fps: 24
+            duration: 5,  // 5 seconds
+            fps: 24      // 24 frames per second
         }
     };
 
     // Add style image if provided (image-to-video)
     if (styleImageBase64) {
+        // DashScope expects base64 image data
         createTaskPayload.input.image_url = `data:image/png;base64,${styleImageBase64}`;
-        log(`Using reference image for Qwen generation...`, 'info');
+        log(`Using reference image for Qwen generation...`, 'info', { verbose: true });
     }
 
-    const createResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/generation', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-            'X-DashScope-Async': 'enable'
-        },
-        body: JSON.stringify(createTaskPayload)
-    });
-
-    if (!createResponse.ok) {
-        const errorText = await createResponse.text();
-        throw new Error(`Qwen API error (${createResponse.status}): ${errorText}`);
-    }
-
-    const createResult = await createResponse.json();
-    
-    if (createResult.code && createResult.code !== '200' && createResult.code !== 200) {
-        throw new Error(`Qwen task creation failed: ${createResult.message || JSON.stringify(createResult)}`);
-    }
-
-    const taskId = createResult.output?.task_id;
-    if (!taskId) {
-        throw new Error(`No task_id in Qwen response: ${JSON.stringify(createResult)}`);
-    }
-
-    log(`Qwen task created: ${taskId}`, 'success');
-    log(`Polling for completion...`, 'info');
-
-    // Step 2: Poll for task completion
-    let pollCount = 0;
-    const maxPolls = 120; // 10 minutes max (5s intervals)
-    
-    while (pollCount < maxPolls) {
-        pollCount++;
-        await new Promise(r => setTimeout(r, 5000)); // Poll every 5 seconds
-
-        const statusResponse = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
-            method: 'GET',
+    try {
+        const createResponse = await fetch('https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/generation', {
+            method: 'POST',
             headers: {
-                'Authorization': `Bearer ${apiKey}`
-            }
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+                'X-DashScope-Async': 'enable'  // Required for async video generation
+            },
+            body: JSON.stringify(createTaskPayload)
         });
 
-        if (!statusResponse.ok) {
-            log(`Poll #${pollCount}: HTTP ${statusResponse.status}`, 'warn');
-            continue;
+        if (!createResponse.ok) {
+            const errorText = await createResponse.text();
+            log(`Qwen API error response: ${errorText}`, 'error', { verbose: true });
+            throw new Error(`Qwen API error (${createResponse.status}): ${errorText}`);
         }
 
-        const statusResult = await statusResponse.json();
-        const taskStatus = statusResult.output?.task_status;
+        const createResult = await createResponse.json();
+        
+        // DashScope returns code in response
+        if (createResult.code && createResult.code !== '200' && createResult.code !== 200) {
+            const errorMsg = createResult.message || createResult.msg || JSON.stringify(createResult);
+            log(`Qwen task creation failed: ${errorMsg}`, 'error');
+            throw new Error(`Qwen task creation failed: ${errorMsg}`);
+        }
 
-        log(`Poll #${pollCount}: status=${taskStatus}`, 'info', { verbose: true });
+        // Extract task_id from response (can be in output.task_id or output.taskId)
+        const taskId = createResult.output?.task_id || createResult.output?.taskId || createResult.task_id || createResult.taskId;
+        if (!taskId) {
+            log(`Qwen response structure: ${JSON.stringify(createResult)}`, 'error', { verbose: true });
+            throw new Error(`No task_id in Qwen response: ${JSON.stringify(createResult)}`);
+        }
 
-        if (taskStatus === 'SUCCEEDED') {
-            const videoUrl = statusResult.output?.video_url;
-            if (!videoUrl) {
-                throw new Error('Qwen task succeeded but no video_url returned');
+        const createDuration = Math.round(performance.now() - apiStart);
+        log(`Qwen task created: ${taskId} (${createDuration}ms)`, 'success');
+        log(`Polling for completion...`, 'info');
+
+        // Step 2: Poll for task completion
+        let pollCount = 0;
+        const maxPolls = 120; // 10 minutes max (5s intervals = 600s total)
+        const pollStartTime = performance.now();
+        
+        while (pollCount < maxPolls) {
+            pollCount++;
+            await delay(5000); // Poll every 5 seconds
+
+            try {
+                const statusResponse = await fetch(`https://dashscope.aliyuncs.com/api/v1/tasks/${taskId}`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                if (!statusResponse.ok) {
+                    const elapsed = Math.round((performance.now() - pollStartTime) / 1000);
+                    log(`Poll #${pollCount}: HTTP ${statusResponse.status} (${elapsed}s elapsed)`, 'warn', { verbose: true });
+                    // Continue polling on transient HTTP errors
+                    if (pollCount < maxPolls) continue;
+                    throw new Error(`Failed to check task status: HTTP ${statusResponse.status}`);
+                }
+
+                const statusResult = await statusResponse.json();
+                
+                // Check for API-level errors
+                if (statusResult.code && statusResult.code !== '200' && statusResult.code !== 200) {
+                    const errorMsg = statusResult.message || statusResult.msg || 'Unknown error';
+                    throw new Error(`Task status check failed: ${errorMsg}`);
+                }
+
+                // Extract task status (can be in output.task_status or output.taskStatus)
+                const taskStatus = statusResult.output?.task_status || statusResult.output?.taskStatus || statusResult.task_status;
+                const elapsed = Math.round((performance.now() - pollStartTime) / 1000);
+
+                log(`Poll #${pollCount}: status=${taskStatus} (${elapsed}s elapsed)`, 'info', { verbose: true });
+
+                if (taskStatus === 'SUCCEEDED' || taskStatus === 'SUCCESS') {
+                    // Extract video URL (can be in different locations)
+                    const videoUrl = statusResult.output?.video_url || 
+                                   statusResult.output?.videoUrl || 
+                                   statusResult.output?.video?.url ||
+                                   statusResult.video_url ||
+                                   statusResult.videoUrl;
+                    
+                    if (!videoUrl) {
+                        log(`Qwen response structure: ${JSON.stringify(statusResult)}`, 'error', { verbose: true });
+                        throw new Error('Qwen task succeeded but no video_url returned');
+                    }
+                    
+                    const totalDuration = Math.round(performance.now() - apiStart);
+                    log(`Qwen video generation complete! (${totalDuration}ms total)`, 'success', {
+                        context: { taskId, videoUrl: videoUrl.substring(0, 50) + '...' },
+                        verbose: true
+                    });
+                    return { videoUrl, taskId };
+                } else if (taskStatus === 'FAILED' || taskStatus === 'FAILURE') {
+                    const errorMsg = statusResult.output?.message || 
+                                   statusResult.output?.error || 
+                                   statusResult.message ||
+                                   'Unknown error';
+                    throw new Error(`Qwen video generation failed: ${errorMsg}`);
+                }
+                // Continue polling for PENDING, RUNNING, PROCESSING states
+            } catch (pollError: any) {
+                const elapsed = Math.round((performance.now() - pollStartTime) / 1000);
+                if (pollCount >= maxPolls) {
+                    throw new Error(`Polling failed after ${elapsed}s: ${pollError?.message || 'Unknown error'}`);
+                }
+                log(`Poll #${pollCount} error (continuing): ${pollError?.message}`, 'warn', { verbose: true });
+                // Continue polling on transient errors
             }
-            log(`Qwen video generation complete!`, 'success');
-            return { videoUrl, taskId };
-        } else if (taskStatus === 'FAILED') {
-            const errorMsg = statusResult.output?.message || 'Unknown error';
-            throw new Error(`Qwen video generation failed: ${errorMsg}`);
         }
-        // Continue polling for PENDING, RUNNING states
-    }
 
-    throw new Error('Qwen video generation timed out after 10 minutes');
+        const totalElapsed = Math.round((performance.now() - pollStartTime) / 1000);
+        throw new Error(`Qwen video generation timed out after ${totalElapsed}s (${pollCount} polls)`);
+    } catch (error: any) {
+        const totalDuration = Math.round(performance.now() - apiStart);
+        log(`Qwen video generation error after ${totalDuration}ms: ${error?.message}`, 'error', {
+            context: { error: error?.message, stack: error?.stack?.substring(0, 200) },
+            verbose: true
+        });
+        throw error;
+    }
 }
 
 // --- VEO VIDEO GENERATION (Legacy/Fallback) ---
