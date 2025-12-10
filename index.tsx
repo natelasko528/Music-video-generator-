@@ -1200,13 +1200,13 @@ async function generateVideoWithQwen(
     const size = sizeMap[aspectRatio] || '1280*720';
 
     log(`Creating Qwen video generation task...`, 'info', {
-        context: { model: 'qwen-max-latest', size, promptLength: prompt.length },
+        context: { model: 'qwen-vl-max', size, promptLength: prompt.length },
         verbose: true
     });
 
     // Step 1: Create video generation task
     const createTaskPayload: any = {
-        model: 'qwen-max-latest',
+        model: 'qwen-vl-max',
         input: {
             prompt: prompt
         },

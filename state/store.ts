@@ -7,7 +7,7 @@ export const PLANNER_MODELS = {
 } as const;
 
 export const VIDEO_MODELS = {
-  qwen: 'qwen-max-latest',
+  qwen: 'qwen-vl-max',
   veo: 'veo-3.1-generate-preview',
 } as const;
 
@@ -127,7 +127,7 @@ export function validateVideoModel(modelId: string): VideoModelId {
 
 export function describeVideoModel(modelId: VideoModelId): string {
   if (modelId === VIDEO_MODELS.veo) return 'Veo 3.1 (Google)';
-  return 'Qwen Max (Default)';
+  return 'Qwen VL Max (Default)';
 }
 
 function notify(next: ProjectState, prev: ProjectState) {
