@@ -1,0 +1,805 @@
+# Music Video AI - Implementation Guide
+
+## Quick Start
+
+This guide walks you through implementing the conversational AI system for your music video editing application.
+
+---
+
+## Table of Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Project Setup](#project-setup)
+3. [Core Implementation Steps](#core-implementation-steps)
+4. [Testing](#testing)
+5. [Deployment](#deployment)
+6. [Common Patterns](#common-patterns)
+
+---
+
+## Prerequisites
+
+### Required Technologies
+- **Python 3.11+**
+- **FastAPI** for WebSocket and REST API
+- **LangChain** for agent orchestration
+- **OpenAI API** (GPT-4 Turbo)
+- **Redis** for session state
+- **PostgreSQL** for persistent data
+- **FFmpeg** for video processing
+
+### Optional (for video generation)
+- CogVideoX API key
+- Vidu API key
+- Google Cloud (Veo API)
+- Runway ML API
+
+---
+
+## Project Setup
+
+### 1. Install Dependencies
+
+```bash
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # or `venv\Scripts\activate` on Windows
+
+# Install packages
+pip install fastapi uvicorn websockets
+pip install langchain langchain-openai
+pip install redis asyncpg
+pip install python-multipart
+pip install pydantic
+pip install tiktoken
+pip install librosa  # For music analysis
+pip install ffmpeg-python
+```
+
+### 2. Environment Configuration
+
+Create `.env` file:
+
+```bash
+# OpenAI
+OPENAI_API_KEY=sk-...
+
+# Database
+POSTGRES_URL=postgresql://user:password@localhost:5432/musicvideo
+REDIS_URL=redis://localhost:6379/0
+
+# Storage (AWS S3)
+S3_BUCKET=your-bucket-name
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=us-east-1
+
+# Video Generation APIs (optional)
+COGVIDEOX_API_KEY=...
+VIDU_API_KEY=...
+GOOGLE_CLOUD_PROJECT=...
+
+# Application
+ENVIRONMENT=development
+LOG_LEVEL=INFO
+MAX_CONTEXT_TOKENS=8000
+```
+
+### 3. Database Setup
+
+```sql
+-- PostgreSQL schema
+
+-- Projects table
+CREATE TABLE projects (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    metadata JSONB
+);
+
+-- Sessions table
+CREATE TABLE sessions (
+    session_id UUID PRIMARY KEY,
+    project_id UUID REFERENCES projects(id),
+    user_id UUID NOT NULL,
+    state_data JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Operations table (for undo/redo and history)
+CREATE TABLE operations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID REFERENCES sessions(session_id),
+    operation_type VARCHAR(100) NOT NULL,
+    parameters JSONB NOT NULL,
+    result JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
+    can_undo BOOLEAN DEFAULT TRUE
+);
+
+-- Music analysis cache
+CREATE TABLE music_analysis (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audio_file_hash VARCHAR(64) UNIQUE NOT NULL,
+    analysis_data JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- User preferences
+CREATE TABLE user_preferences (
+    user_id UUID PRIMARY KEY,
+    default_style VARCHAR(50) DEFAULT 'cinematic',
+    preferences JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX idx_sessions_user ON sessions(user_id);
+CREATE INDEX idx_sessions_project ON sessions(project_id);
+CREATE INDEX idx_operations_session ON operations(session_id);
+CREATE INDEX idx_music_analysis_hash ON music_analysis(audio_file_hash);
+```
+
+---
+
+## Core Implementation Steps
+
+### Step 1: Basic Server Setup
+
+```python
+# main.py
+
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
+
+app = FastAPI(title="Music Video AI")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# WebSocket endpoint
+@app.websocket("/ws/edit/{session_id}")
+async def editing_session(websocket: WebSocket, session_id: str):
+    await websocket.accept()
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            # Handle messages here
+            
+    except WebSocketDisconnect:
+        print(f"Client {session_id} disconnected")
+
+# Health check
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+```
+
+### Step 2: Implement State Management
+
+```python
+# state.py
+
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional
+from datetime import datetime
+import json
+
+@dataclass
+class LayeredState:
+    """Application state"""
+    session_id: str
+    project_id: str
+    user_id: str
+    
+    # Timeline
+    timeline: List[dict] = field(default_factory=list)
+    storyboard: List[dict] = field(default_factory=list)
+    
+    # Operations
+    operation_stack: List[dict] = field(default_factory=list)
+    undo_stack: List[dict] = field(default_factory=list)
+    
+    # Music context
+    music_analysis: Optional[dict] = None
+    current_playhead: float = 0.0
+    
+    # Conversation
+    message_history: List[dict] = field(default_factory=list)
+    conversation_mode: str = "idle"
+    
+    def to_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "timeline": self.timeline,
+            "storyboard": self.storyboard,
+            # ... serialize all fields
+        }
+
+class StateManager:
+    """Manage state persistence"""
+    
+    def __init__(self, redis_client, postgres_client):
+        self.redis = redis_client
+        self.postgres = postgres_client
+    
+    async def load(self, session_id: str) -> LayeredState:
+        """Load state from Redis or Postgres"""
+        # Try Redis first
+        cached = await self.redis.get(f"session:{session_id}")
+        if cached:
+            data = json.loads(cached)
+            return LayeredState(**data)
+        
+        # Fall back to Postgres
+        # ... load from database
+        
+        # Create new state if not found
+        return LayeredState(
+            session_id=session_id,
+            project_id="",
+            user_id=""
+        )
+    
+    async def save(self, state: LayeredState):
+        """Save state to Redis and periodically to Postgres"""
+        serialized = json.dumps(state.to_dict())
+        
+        # Save to Redis
+        await self.redis.setex(
+            f"session:{state.session_id}",
+            1800,  # 30 min TTL
+            serialized
+        )
+        
+        # Periodically save to Postgres
+        # ... database persistence
+```
+
+### Step 3: Implement LangChain Agent
+
+```python
+# agent.py
+
+from langchain.chat_models import ChatOpenAI
+from langchain.agents import Tool, AgentExecutor
+from langchain.prompts import PromptTemplate
+
+class MusicVideoAgent:
+    """Conversational agent for music video editing"""
+    
+    def __init__(self):
+        self.llm = ChatOpenAI(
+            model="gpt-4-turbo-preview",
+            temperature=0.7,
+            streaming=True
+        )
+        
+        self.tools = self._build_tools()
+    
+    def _build_tools(self) -> List[Tool]:
+        """Define available tools"""
+        return [
+            Tool(
+                name="create_storyboard_scene",
+                func=self._create_scene,
+                description="Create a new storyboard scene with description and timing"
+            ),
+            Tool(
+                name="trim_clip",
+                func=self._trim_clip,
+                description="Trim video clip to specified time range"
+            ),
+            Tool(
+                name="apply_effect",
+                func=self._apply_effect,
+                description="Apply visual effect to clip"
+            ),
+            # ... add more tools
+        ]
+    
+    async def _create_scene(self, params: dict):
+        """Tool implementation for creating scene"""
+        # Implementation here
+        pass
+    
+    async def _trim_clip(self, params: dict):
+        """Tool implementation for trimming"""
+        pass
+    
+    async def _apply_effect(self, params: dict):
+        """Tool implementation for effects"""
+        pass
+```
+
+### Step 4: Implement Intent Classification
+
+```python
+# nlu.py
+
+from typing import Dict, List
+import re
+
+class IntentClassifier:
+    """Classify user intent from natural language"""
+    
+    async def classify(self, user_input: str, context: Dict) -> Dict:
+        """
+        Classify intent and extract entities
+        
+        Returns:
+            {
+                "primary_intent": "create" | "edit" | "adjust" | etc,
+                "sub_intent": specific operation type,
+                "entities": extracted entities,
+                "confidence": 0.0-1.0
+            }
+        """
+        
+        text_lower = user_input.lower()
+        
+        # Pattern matching for intents
+        if any(kw in text_lower for kw in ["create", "make", "add", "new"]):
+            return {
+                "primary_intent": "create",
+                "sub_intent": self._detect_create_target(text_lower),
+                "entities": self._extract_entities(user_input, context),
+                "confidence": 0.85
+            }
+        
+        elif any(kw in text_lower for kw in ["trim", "cut", "edit"]):
+            return {
+                "primary_intent": "edit",
+                "sub_intent": "trim",
+                "entities": self._extract_entities(user_input, context),
+                "confidence": 0.9
+            }
+        
+        elif any(kw in text_lower for kw in ["more", "less", "adjust"]):
+            return {
+                "primary_intent": "adjust",
+                "sub_intent": "parameter",
+                "entities": self._extract_entities(user_input, context),
+                "confidence": 0.8
+            }
+        
+        # Default
+        return {
+            "primary_intent": "unknown",
+            "confidence": 0.3
+        }
+    
+    def _extract_entities(self, text: str, context: Dict) -> Dict:
+        """Extract entities from text"""
+        entities = {
+            "time_references": [],
+            "music_sections": [],
+            "adjustments": [],
+            "targets": []
+        }
+        
+        # Extract time references
+        time_patterns = [r"(\d+):(\d+)", r"(\d+)s", r"at\s+(\d+)"]
+        for pattern in time_patterns:
+            matches = re.findall(pattern, text)
+            if matches:
+                entities["time_references"].extend(matches)
+        
+        # Extract music sections
+        sections = ["intro", "verse", "chorus", "bridge", "outro"]
+        for section in sections:
+            if section in text.lower():
+                entities["music_sections"].append(section)
+        
+        # Extract adjustment terms
+        if "more" in text.lower():
+            entities["adjustments"].append({"type": "increase", "amount": 1})
+        if "less" in text.lower():
+            entities["adjustments"].append({"type": "decrease", "amount": 1})
+        
+        return entities
+```
+
+### Step 5: Implement Context Window Management
+
+```python
+# context.py
+
+import tiktoken
+
+class ContextWindowManager:
+    """Manage LLM context window efficiently"""
+    
+    def __init__(self, model: str = "gpt-4-turbo", max_tokens: int = 8000):
+        self.model = model
+        self.max_tokens = max_tokens
+        self.encoding = tiktoken.encoding_for_model(model)
+    
+    def build_context(self, state, user_input: str) -> str:
+        """Build optimized context"""
+        
+        parts = []
+        budget = self.max_tokens
+        
+        # 1. System prompt (always include)
+        system_prompt = "You are an expert music video editing assistant..."
+        parts.append(system_prompt)
+        budget -= self._count_tokens(system_prompt)
+        
+        # 2. Current turn
+        current = f"User: {user_input}"
+        parts.append(current)
+        budget -= self._count_tokens(current)
+        
+        # 3. Essential context
+        essential = self._format_essential_context(state)
+        if self._count_tokens(essential) < budget:
+            parts.append(essential)
+            budget -= self._count_tokens(essential)
+        
+        # 4. Recent conversation (fit remaining budget)
+        if budget > 0:
+            history = self._format_history(state.message_history, budget)
+            parts.append(history)
+        
+        return "\n\n".join(parts)
+    
+    def _count_tokens(self, text: str) -> int:
+        return len(self.encoding.encode(text))
+    
+    def _format_essential_context(self, state) -> str:
+        parts = []
+        
+        if state.music_analysis:
+            parts.append(f"Music: {state.music_analysis.get('tempo')} BPM")
+        
+        if state.timeline:
+            parts.append(f"Timeline: {len(state.timeline)} clips")
+        
+        return "\n".join(parts)
+    
+    def _format_history(self, messages: List[Dict], budget: int) -> str:
+        # Keep most recent messages that fit budget
+        formatted = []
+        used_tokens = 0
+        
+        for msg in reversed(messages[-10:]):  # Last 10 messages
+            text = f"{msg['role']}: {msg['content']}"
+            tokens = self._count_tokens(text)
+            
+            if used_tokens + tokens < budget:
+                formatted.insert(0, text)
+                used_tokens += tokens
+            else:
+                break
+        
+        return "\n".join(formatted)
+```
+
+### Step 6: Implement Undo/Redo
+
+```python
+# undo.py
+
+class ConversationalUndoRedo:
+    """Natural language undo/redo system"""
+    
+    async def parse_undo_request(self, user_input: str, state) -> dict:
+        """Parse undo request from natural language"""
+        
+        text_lower = user_input.lower()
+        
+        # Simple undo
+        if text_lower in ["undo", "undo that", "go back"]:
+            return {"type": "single", "steps": 1}
+        
+        # Multiple steps: "undo 3 steps"
+        if "undo" in text_lower and any(char.isdigit() for char in text_lower):
+            steps = int(''.join(filter(str.isdigit, text_lower)))
+            return {"type": "multiple", "steps": steps}
+        
+        # Selective: "undo the color changes"
+        if "color" in text_lower:
+            return {"type": "selective", "operation_type": "color_grade"}
+        
+        return {"type": "single", "steps": 1}
+    
+    async def execute_undo(self, request: dict, state) -> dict:
+        """Execute undo operation"""
+        
+        if request["type"] == "single":
+            if not state.operation_stack:
+                return {"success": False, "message": "Nothing to undo"}
+            
+            # Pop last operation
+            operation = state.operation_stack.pop()
+            
+            # Revert operation
+            await self._revert_operation(operation, state)
+            
+            # Add to undo stack
+            state.undo_stack.append(operation)
+            
+            return {
+                "success": True,
+                "message": f"Undid: {operation.get('type')}"
+            }
+        
+        elif request["type"] == "multiple":
+            # Undo multiple operations
+            steps = min(request["steps"], len(state.operation_stack))
+            undone = []
+            
+            for _ in range(steps):
+                if state.operation_stack:
+                    op = state.operation_stack.pop()
+                    await self._revert_operation(op, state)
+                    state.undo_stack.append(op)
+                    undone.append(op)
+            
+            return {
+                "success": True,
+                "message": f"Undid {len(undone)} operations"
+            }
+        
+        # ... handle other types
+    
+    async def _revert_operation(self, operation: dict, state):
+        """Revert specific operation"""
+        # Restore state from operation's state_before
+        pass
+```
+
+---
+
+## Testing
+
+### Unit Tests
+
+```python
+# tests/test_intent_classification.py
+
+import pytest
+from nlu import IntentClassifier
+
+@pytest.mark.asyncio
+async def test_create_scene_intent():
+    classifier = IntentClassifier()
+    
+    result = await classifier.classify(
+        "Create a scene at the beginning with a sunrise",
+        context={}
+    )
+    
+    assert result["primary_intent"] == "create"
+    assert result["sub_intent"] == "scene"
+    assert "sunrise" in result["entities"]["description"]
+
+@pytest.mark.asyncio
+async def test_trim_intent():
+    classifier = IntentClassifier()
+    
+    result = await classifier.classify(
+        "Trim the clip at 2:30",
+        context={}
+    )
+    
+    assert result["primary_intent"] == "edit"
+    assert result["sub_intent"] == "trim"
+    assert "2:30" in str(result["entities"]["time_references"])
+```
+
+### Integration Tests
+
+```python
+# tests/test_conversation_flow.py
+
+@pytest.mark.asyncio
+async def test_full_conversation_flow():
+    # Setup
+    ai_system = MusicVideoAISystem()
+    session_id = "test_session"
+    
+    # Test conversation
+    response1 = await ai_system.handle_message(
+        session_id=session_id,
+        message="Create a scene at the intro"
+    )
+    
+    assert response1["success"]
+    
+    # Load state and verify
+    state = await ai_system.state_manager.load(session_id)
+    assert len(state.storyboard) == 1
+```
+
+---
+
+## Deployment
+
+### Docker Setup
+
+```dockerfile
+# Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Application
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - POSTGRES_URL=postgresql://user:pass@postgres:5432/musicvideo
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - postgres
+      - redis
+  
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: musicvideo
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  postgres_data:
+```
+
+### AWS Deployment
+
+```bash
+# Push to ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
+
+docker build -t music-video-ai .
+docker tag music-video-ai:latest <account>.dkr.ecr.us-east-1.amazonaws.com/music-video-ai:latest
+docker push <account>.dkr.ecr.us-east-1.amazonaws.com/music-video-ai:latest
+
+# Deploy to ECS
+aws ecs update-service --cluster music-video-cluster --service music-video-service --force-new-deployment
+```
+
+---
+
+## Common Patterns
+
+### Pattern 1: Music-Aware Timing
+
+```python
+# Always resolve music-relative times
+def resolve_music_time(time_input: str, music_analysis: dict) -> float:
+    """Convert 'chorus', 'beat:32', etc to absolute seconds"""
+    
+    if time_input in music_analysis["sections"]:
+        return music_analysis["sections"][time_input]["start_time"]
+    
+    if time_input.startswith("beat:"):
+        beat_num = int(time_input.split(":")[1])
+        return music_analysis["beats"][beat_num]["time"]
+    
+    # Parse as absolute time
+    return float(time_input)
+```
+
+### Pattern 2: Progressive Parameter Refinement
+
+```python
+# Track parameter changes across turns
+class ParameterTracker:
+    def __init__(self):
+        self.history = []
+    
+    def apply_adjustment(self, param: str, adjustment: str, current_value: float):
+        """Apply relative adjustment: 'more', 'less', etc"""
+        
+        delta = 0
+        if adjustment == "more":
+            delta = current_value * 0.2  # +20%
+        elif adjustment == "less":
+            delta = current_value * -0.2  # -20%
+        
+        new_value = current_value + delta
+        
+        # Track in history
+        self.history.append({
+            "param": param,
+            "old_value": current_value,
+            "new_value": new_value,
+            "adjustment": adjustment
+        })
+        
+        return new_value
+```
+
+### Pattern 3: Conversational Confirmation
+
+```python
+# Confirm destructive operations
+async def handle_message(message: str, state):
+    intent = await classify_intent(message)
+    
+    if intent["requires_confirmation"]:
+        # Store pending operation
+        state.pending_confirmations.append({
+            "operation": intent,
+            "message": f"This will {intent['description']}. Proceed?"
+        })
+        
+        return {
+            "type": "clarification",
+            "message": state.pending_confirmations[-1]["message"],
+            "options": ["Yes, proceed", "No, cancel"]
+        }
+    
+    # Execute immediately
+    return await execute_operation(intent, state)
+```
+
+---
+
+## Next Steps
+
+1. **Add Music Analysis**: Integrate Librosa or Essentia for beat detection and section analysis
+2. **Implement Video Generation**: Connect to CogVideoX, Vidu, or Google Veo APIs
+3. **Add Vector Search**: Use Pinecone or Weaviate for semantic search over storyboards
+4. **Build UI**: Create React/Vue frontend with timeline and chat interface
+5. **Add Monitoring**: Integrate Prometheus, Grafana, and error tracking
+6. **Scale**: Add load balancing, auto-scaling, and CDN for media files
+
+---
+
+## Support & Resources
+
+- **Full Documentation**: See `music_video_ai_architecture.md`
+- **Architecture Diagrams**: Check generated PNG files
+- **Code Examples**: See code/ folder
+
+---
+
+**Built with ❤️ by the Music Video AI Team**
