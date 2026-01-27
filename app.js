@@ -6,6 +6,8 @@ class MusicVideoApp {
     }
 
     init() {
+        console.log('🚀 Initializing MusicVideoApp...');
+
         // DOM Elements
         this.settingsModal = document.getElementById('settingsModal');
         this.settingsBtn = document.getElementById('settingsBtn');
@@ -28,6 +30,29 @@ class MusicVideoApp {
     }
 
     bindEvents() {
+        console.log('🎯 Binding events...');
+
+        // Verify critical elements exist
+        if (!this.settingsBtn) {
+            console.error('❌ settingsBtn element not found! ID might be wrong.');
+            return;
+        }
+        if (!this.getStartedBtn) {
+            console.error('❌ getStartedBtn element not found! ID might be wrong.');
+            return;
+        }
+        if (!this.settingsModal) {
+            console.error('❌ settingsModal element not found! ID might be wrong.');
+            return;
+        }
+
+        console.log('✅ All critical elements found:', {
+            settingsBtn: !!this.settingsBtn,
+            getStartedBtn: !!this.getStartedBtn,
+            settingsModal: !!this.settingsModal
+        });
+
+        try {
         // Settings modal
         this.settingsBtn.addEventListener('click', () => this.openSettings());
         this.getStartedBtn.addEventListener('click', () => this.openSettings());
@@ -65,12 +90,22 @@ class MusicVideoApp {
 
         // Load saved settings into form
         this.loadSettingsIntoForm();
+            console.log('✅ All event listeners bound successfully');
+        } catch (error) {
+            console.error('❌ Error binding events:', error);
+        }
     }
 
     // Settings Management
     openSettings() {
-        this.settingsModal.classList.add('active');
-        this.loadSettingsIntoForm();
+        console.log('🔓 Opening settings modal...');
+        try {
+            this.settingsModal.classList.add('active');
+            this.loadSettingsIntoForm();
+            console.log('✅ Settings modal opened successfully');
+        } catch (error) {
+            console.error('❌ Error opening settings:', error);
+        }
     }
 
     closeSettings() {
