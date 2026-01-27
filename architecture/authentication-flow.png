@@ -1,0 +1,556 @@
+# Environment Variables Documentation
+
+## Complete Configuration Guide for GHL Onboarding Agent
+
+This document provides comprehensive instructions for setting up all required environment variables across different deployment environments.
+
+---
+
+## 📋 **Table of Contents**
+
+1. [Quick Reference](#quick-reference)
+2. [Supabase Configuration](#supabase-configuration)
+3. [GoHighLevel OAuth](#gohighlevel-oauth)
+4. [Inngest Configuration](#inngest-configuration)
+5. [NextAuth Configuration](#nextauth-configuration)
+6. [Optional Variables](#optional-variables)
+7. [Environment-Specific Setup](#environment-specific-setup)
+8. [Security Best Practices](#security-best-practices)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## 🎯 **Quick Reference**
+
+### **Required Variables (11 total)**
+
+```bash
+# Supabase (3 variables)
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+# GoHighLevel OAuth (3 variables)
+GHL_CLIENT_ID=
+GHL_CLIENT_SECRET=
+GHL_REDIRECT_URI=
+
+# Inngest (2 variables)
+INNGEST_EVENT_KEY=
+INNGEST_SIGNING_KEY=
+
+# NextAuth (2 variables)
+NEXTAUTH_SECRET=
+NEXTAUTH_URL=
+
+# Environment
+NODE_ENV=production
+```
+
+---
+
+## 🗄️ **Supabase Configuration**
+
+### **1. NEXT_PUBLIC_SUPABASE_URL**
+
+**Description:** Your Supabase project URL  
+**Required:** ✅ Yes  
+**Public:** ✅ Yes (exposed to browser)  
+**Format:** `https://[project-id].supabase.co`
+
+**How to Get:**
+1. Go to [https://supabase.com/dashboard](https://supabase.com/dashboard)
+2. Select your project
+3. Navigate to **Settings** → **API**
+4. Copy **Project URL**
+
+**Example:**
+```bash
+NEXT_PUBLIC_SUPABASE_URL=https://xyzabcdefgh123456.supabase.co
+```
+
+---
+
+### **2. NEXT_PUBLIC_SUPABASE_ANON_KEY**
+
+**Description:** Public anonymous key for client-side operations  
+**Required:** ✅ Yes  
+**Public:** ✅ Yes (exposed to browser)  
+**Format:** Long JWT string starting with `eyJ`
+
+**How to Get:**
+1. Same location as above: **Settings** → **API**
+2. Copy **anon public** key
+
+**Example:**
+```bash
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5emFiY2RlZmdoMTIzNDU2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTk5OTk5OTksImV4cCI6MjAxNTU3NTk5OX0.abcdefghijklmnopqrstuvwxyz1234567890
+```
+
+**Security Note:** While public, this key is safe to expose because Row Level Security (RLS) policies protect your data.
+
+---
+
+### **3. SUPABASE_SERVICE_ROLE_KEY**
+
+**Description:** Admin key for server-side operations (bypasses RLS)  
+**Required:** ✅ Yes  
+**Public:** ❌ No (server-only, NEVER expose)  
+**Format:** Long JWT string starting with `eyJ`
+
+**How to Get:**
+1. Same location: **Settings** → **API**
+2. Copy **service_role secret** key
+3. **⚠️ CRITICAL:** Keep this secret - it has admin privileges
+
+**Example:**
+```bash
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5emFiY2RlZmdoMTIzNDU2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTY5OTk5OTk5OSwiZXhwIjoyMDE1NTc1OTk5fQ.zyxwvutsrqponmlkjihgfedcba0987654321
+```
+
+**Security Warning:** 🚨 This key bypasses all RLS policies. Never commit to Git or expose to clients.
+
+---
+
+## 🔐 **GoHighLevel OAuth**
+
+### **4. GHL_CLIENT_ID**
+
+**Description:** OAuth 2.0 Client ID from GHL  
+**Required:** ✅ Yes  
+**Public:** ⚠️ Semi-public (can be in frontend but better kept private)  
+**Format:** UUID or alphanumeric string
+
+**How to Get:**
+1. Log in to [GHL Developer Portal](https://marketplace.gohighlevel.com/)
+2. Navigate to **My Apps** → **Create App**
+3. Fill in app details:
+   - **App Name:** GHL Onboarding Agent
+   - **App Type:** Private or Public
+   - **Redirect URI:** (see #6 below)
+4. Copy **Client ID** after creation
+
+**Example:**
+```bash
+GHL_CLIENT_ID=a1b2c3d4-e5f6-7890-g1h2-i3j4k5l6m7n8
+```
+
+---
+
+### **5. GHL_CLIENT_SECRET**
+
+**Description:** OAuth 2.0 Client Secret from GHL  
+**Required:** ✅ Yes  
+**Public:** ❌ No (server-only, NEVER expose)  
+**Format:** Long alphanumeric string
+
+**How to Get:**
+1. Same location as Client ID
+2. Copy **Client Secret** (shown only once - save it!)
+3. If lost, regenerate from GHL Developer Portal
+
+**Example:**
+```bash
+GHL_CLIENT_SECRET=9z8y7x6w5v4u3t2s1r0q9p8o7n6m5l4k3j2i1h0g9f8e7d6c5b4a3z2y1x0
+```
+
+**Security Warning:** 🚨 Never commit this to version control or expose to clients.
+
+---
+
+### **6. GHL_REDIRECT_URI**
+
+**Description:** OAuth callback URL for token exchange  
+**Required:** ✅ Yes  
+**Public:** ⚠️ Semi-public (visible in OAuth flow)  
+**Format:** Full URL to your callback endpoint
+
+**How to Set:**
+1. **Development:** `http://localhost:3000/api/auth/ghl/callback`
+2. **Production:** `https://yourdomain.com/api/auth/ghl/callback`
+3. **Must match exactly** what you configured in GHL Developer Portal
+
+**Example:**
+```bash
+# Development
+GHL_REDIRECT_URI=http://localhost:3000/api/auth/ghl/callback
+
+# Production
+GHL_REDIRECT_URI=https://ghl-onboarding.vercel.app/api/auth/ghl/callback
+```
+
+**Important:** Update this in **both** places:
+- Your `.env` file
+- GHL Developer Portal app settings
+
+---
+
+## ⚡ **Inngest Configuration**
+
+### **7. INNGEST_EVENT_KEY**
+
+**Description:** API key for sending events to Inngest  
+**Required:** ✅ Yes  
+**Public:** ❌ No (server-only)  
+**Format:** Starts with `inngest_`
+
+**How to Get:**
+1. Go to [https://app.inngest.com](https://app.inngest.com)
+2. Navigate to **Settings** → **Keys**
+3. Create a new **Event Key**
+4. Copy the key (shown only once)
+
+**Example:**
+```bash
+INNGEST_EVENT_KEY=inngest_abc123def456ghi789jkl012mno345pqr678stu901vwx234
+```
+
+**Usage:** Used by your application to trigger Inngest workflows.
+
+---
+
+### **8. INNGEST_SIGNING_KEY**
+
+**Description:** Key for verifying webhook signatures from Inngest  
+**Required:** ✅ Yes  
+**Public:** ❌ No (server-only)  
+**Format:** Starts with `signkey-prod-` or `signkey-test-`
+
+**How to Get:**
+1. Same location: **Settings** → **Keys**
+2. Copy **Signing Key** for your environment
+3. Use `signkey-test-` for development, `signkey-prod-` for production
+
+**Example:**
+```bash
+# Development
+INNGEST_SIGNING_KEY=signkey-test-abc123def456ghi789jkl012mno345pqr678
+
+# Production
+INNGEST_SIGNING_KEY=signkey-prod-abc123def456ghi789jkl012mno345pqr678
+```
+
+**Usage:** Verifies that incoming webhook requests actually come from Inngest.
+
+---
+
+## 🔒 **NextAuth Configuration**
+
+### **9. NEXTAUTH_SECRET**
+
+**Description:** Secret key for signing session tokens  
+**Required:** ✅ Yes  
+**Public:** ❌ No (server-only, NEVER expose)  
+**Format:** Random 32+ character string
+
+**How to Generate:**
+
+**Option 1: Using OpenSSL (recommended)**
+```bash
+openssl rand -base64 32
+```
+
+**Option 2: Using Node.js**
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+**Option 3: Using Password Generator**
+- Go to https://generate-secret.vercel.app/32
+- Copy the generated string
+
+**Example:**
+```bash
+NEXTAUTH_SECRET=Abc123Def456Ghi789Jkl012Mno345Pqr678Stu901Vwx234==
+```
+
+**Security Warning:** 🚨 Use a different secret for each environment. Never reuse or share.
+
+---
+
+### **10. NEXTAUTH_URL**
+
+**Description:** Canonical URL of your application  
+**Required:** ✅ Yes  
+**Public:** ⚠️ Semi-public (used for redirects)  
+**Format:** Full domain URL (no trailing slash)
+
+**How to Set:**
+1. **Development:** `http://localhost:3000`
+2. **Production:** `https://yourdomain.com`
+
+**Example:**
+```bash
+# Development
+NEXTAUTH_URL=http://localhost:3000
+
+# Production
+NEXTAUTH_URL=https://ghl-onboarding.vercel.app
+```
+
+**Usage:** Used by NextAuth for callback URLs, CSRF protection, and redirects.
+
+---
+
+## 🎚️ **Optional Variables**
+
+### **11. NODE_ENV**
+
+**Description:** Environment identifier  
+**Required:** ⚠️ Recommended  
+**Public:** ✅ Yes  
+**Format:** `development` | `production` | `test`
+
+**Example:**
+```bash
+NODE_ENV=production
+```
+
+**Auto-set by:** Vercel (production), Next.js dev server (development)
+
+---
+
+### **12. NEXT_TELEMETRY_DISABLED**
+
+**Description:** Disable Next.js telemetry  
+**Required:** ❌ No  
+**Public:** ✅ Yes  
+**Format:** `1` | `0`
+
+**Example:**
+```bash
+NEXT_TELEMETRY_DISABLED=1
+```
+
+---
+
+### **13. DATABASE_URL** (Future)
+
+**Description:** PostgreSQL connection string (if using direct connections)  
+**Required:** ❌ No (not currently used)  
+**Format:** `postgresql://user:password@host:port/database`
+
+---
+
+## 🌍 **Environment-Specific Setup**
+
+### **Development (.env.local)**
+
+Create a `.env.local` file in your project root:
+
+```bash
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+
+# GoHighLevel
+GHL_CLIENT_ID=your-client-id
+GHL_CLIENT_SECRET=your-client-secret
+GHL_REDIRECT_URI=http://localhost:3000/api/auth/ghl/callback
+
+# Inngest
+INNGEST_EVENT_KEY=your-event-key
+INNGEST_SIGNING_KEY=signkey-test-your-signing-key
+
+# NextAuth
+NEXTAUTH_SECRET=your-local-secret
+NEXTAUTH_URL=http://localhost:3000
+
+# Environment
+NODE_ENV=development
+```
+
+---
+
+### **Production (Vercel)**
+
+**Add variables via Vercel Dashboard:**
+
+1. Go to your project in Vercel
+2. Navigate to **Settings** → **Environment Variables**
+3. Add each variable with appropriate scope:
+   - **Production:** For production builds
+   - **Preview:** For preview deployments
+   - **Development:** For local development (optional)
+
+**Scoping Recommendations:**
+- `NEXT_PUBLIC_*` → All environments
+- Secrets → Production only (use different values for Preview)
+- `NEXTAUTH_URL` → Environment-specific
+- `GHL_REDIRECT_URI` → Environment-specific
+
+**Vercel CLI (alternative):**
+```bash
+vercel env add NEXT_PUBLIC_SUPABASE_URL production
+vercel env add SUPABASE_SERVICE_ROLE_KEY production
+# ... repeat for all variables
+```
+
+---
+
+### **Staging Environment**
+
+If you have a staging environment, duplicate production variables but:
+- Use separate GHL OAuth app (staging client ID/secret)
+- Use separate Inngest workspace (staging keys)
+- Use different `NEXTAUTH_SECRET`
+- Update `NEXTAUTH_URL` and `GHL_REDIRECT_URI` to staging domain
+
+---
+
+## 🔐 **Security Best Practices**
+
+### **✅ DO:**
+
+1. **Use Environment Variables**
+   - Never hardcode secrets in code
+   - Use `.env.local` for local development
+   - Add `.env*` to `.gitignore`
+
+2. **Rotate Secrets Regularly**
+   - Change `NEXTAUTH_SECRET` every 90 days
+   - Rotate GHL credentials if compromised
+   - Update keys after team member departures
+
+3. **Use Different Secrets Per Environment**
+   - Development, staging, and production should have unique values
+   - Prevents production data exposure in dev/test
+
+4. **Limit Access**
+   - Only grant Vercel access to necessary team members
+   - Use Vercel's role-based access control
+   - Audit access logs regularly
+
+5. **Monitor for Leaks**
+   - Use tools like GitGuardian or TruffleHog
+   - Set up alerts for exposed secrets
+   - Scan before every commit
+
+---
+
+### **❌ DON'T:**
+
+1. **Never Commit Secrets to Git**
+   - Check `.gitignore` includes `.env*`
+   - Don't store secrets in README or docs
+   - Don't use example secrets in production
+
+2. **Never Log Secrets**
+   - Sanitize logs to remove sensitive data
+   - Don't console.log environment variables
+   - Use structured logging with redaction
+
+3. **Never Share Secrets via Insecure Channels**
+   - Don't send via Slack/email
+   - Use 1Password, LastPass, or similar
+   - Use temporary secure sharing services if needed
+
+4. **Never Reuse Secrets**
+   - Each app should have unique credentials
+   - Each environment should have unique secrets
+   - Don't copy production secrets to staging
+
+---
+
+## 🛠️ **Troubleshooting**
+
+### **"Missing environment variable" error**
+
+**Cause:** Variable not set or misnamed  
+**Solution:**
+1. Check spelling (case-sensitive)
+2. Verify variable is in correct `.env` file
+3. Restart dev server after adding variables
+4. In Vercel, redeploy after adding variables
+
+---
+
+### **"Invalid Supabase URL" error**
+
+**Cause:** Incorrect format or wrong URL  
+**Solution:**
+1. Ensure URL starts with `https://`
+2. Verify project ID matches Supabase dashboard
+3. Check for trailing slashes (remove them)
+
+---
+
+### **"OAuth redirect URI mismatch" error**
+
+**Cause:** `GHL_REDIRECT_URI` doesn't match GHL settings  
+**Solution:**
+1. Compare variable value with GHL Developer Portal
+2. Ensure exact match (including protocol, port, path)
+3. Update both places if needed
+4. Restart server after changes
+
+---
+
+### **"Inngest signature verification failed"**
+
+**Cause:** Wrong signing key or environment mismatch  
+**Solution:**
+1. Use `signkey-test-` for development
+2. Use `signkey-prod-` for production
+3. Verify key is copied completely
+4. Check Inngest dashboard for correct key
+
+---
+
+### **"NextAuth session not persisting"**
+
+**Cause:** Missing or incorrect `NEXTAUTH_SECRET`  
+**Solution:**
+1. Generate new secret using OpenSSL
+2. Ensure secret is at least 32 characters
+3. Restart application after setting
+4. Clear cookies and try again
+
+---
+
+## 📝 **Validation Checklist**
+
+Before deploying, verify:
+
+- [ ] All 11 required variables are set
+- [ ] `NEXT_PUBLIC_*` variables are accessible in browser console
+- [ ] Server-only variables are NOT accessible in browser
+- [ ] OAuth flow completes successfully
+- [ ] Supabase connection works (test query)
+- [ ] Inngest events trigger workflows
+- [ ] NextAuth login/logout works
+- [ ] No secrets logged to console
+- [ ] `.env.local` is in `.gitignore`
+- [ ] Production uses different secrets than development
+
+---
+
+## 🔗 **Quick Links**
+
+- [Supabase Dashboard](https://supabase.com/dashboard)
+- [GHL Developer Portal](https://marketplace.gohighlevel.com/)
+- [Inngest Dashboard](https://app.inngest.com)
+- [Vercel Dashboard](https://vercel.com/dashboard)
+- [Generate Secret Tool](https://generate-secret.vercel.app/32)
+- [.gitignore Generator](https://www.toptal.com/developers/gitignore/api/node,nextjs)
+
+---
+
+## 💬 **Support**
+
+**Need help?**
+- Check the main [README.md](../README.md) for project setup
+- See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for common issues
+- Review [DEPLOYMENT-GUIDE.md](./DEPLOYMENT-GUIDE.md) for deployment steps
+
+**Still stuck?**
+- Open an issue on GitHub
+- Contact the development team
+- Check Next.js, Supabase, or Inngest documentation
+
+---
+
+**Last Updated:** January 27, 2026  
+**Version:** 1.0.0  
+**Maintainer:** Development Team
