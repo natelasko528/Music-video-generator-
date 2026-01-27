@@ -1,0 +1,604 @@
+# Deployment Guide - GHL Onboarding Agent API
+
+Complete guide for deploying the Next.js 14 API backend to production.
+
+## Table of Contents
+
+- [Pre-Deployment Checklist](#pre-deployment-checklist)
+- [Supabase Setup](#supabase-setup)
+- [Vercel Deployment](#vercel-deployment)
+- [Environment Configuration](#environment-configuration)
+- [Post-Deployment Testing](#post-deployment-testing)
+- [Monitoring Setup](#monitoring-setup)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Pre-Deployment Checklist
+
+Before deploying to production, ensure you have:
+
+- ✅ Supabase project created
+- ✅ Database schema deployed
+- ✅ RLS policies enabled
+- ✅ GHL OAuth app configured
+- ✅ GitHub repository ready
+- ✅ Vercel account created
+- ✅ All environment variables documented
+
+---
+
+## Supabase Setup
+
+### 1. Create Supabase Project
+
+1. Go to https://supabase.com/dashboard
+2. Click "New Project"
+3. Enter project details:
+   - Name: `ghl-onboarding-agent-prod`
+   - Database Password: Generate strong password
+   - Region: Choose closest to your users
+4. Click "Create new project"
+
+### 2. Deploy Database Schema
+
+Run the following SQL in Supabase SQL Editor:
+
+```sql
+-- ============================================================================
+-- PROFILES TABLE
+-- ============================================================================
+
+CREATE TABLE public.profiles (
+  id UUID REFERENCES auth.users(id) PRIMARY KEY,
+  email TEXT NOT NULL,
+  full_name TEXT,
+  agency_name TEXT,
+  ghl_agency_id TEXT,
+  ghl_access_token TEXT,
+  ghl_refresh_token TEXT,
+  ghl_token_expires_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================================
+-- ONBOARDING SUBMISSIONS TABLE
+-- ============================================================================
+
+CREATE TABLE public.onboarding_submissions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.profiles(id) NOT NULL,
+  form_data JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  step_completed INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  submitted_at TIMESTAMPTZ,
+  CONSTRAINT valid_status CHECK (
+    status IN ('draft', 'submitted', 'processing', 'completed', 'failed')
+  )
+);
+
+-- ============================================================================
+-- IMPLEMENTATIONS TABLE
+-- ============================================================================
+
+CREATE TABLE public.implementations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  submission_id UUID REFERENCES public.onboarding_submissions(id) NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) NOT NULL,
+  ghl_location_id TEXT,
+  ghl_location_name TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  current_step TEXT,
+  total_steps INTEGER,
+  completed_steps INTEGER DEFAULT 0,
+  progress_percentage INTEGER DEFAULT 0,
+  estimated_duration INTEGER,
+  elapsed_duration INTEGER,
+  created_resources JSONB,
+  completion_report JSONB,
+  error_message TEXT,
+  error_stack TEXT,
+  retry_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  failed_at TIMESTAMPTZ,
+  CONSTRAINT valid_status CHECK (
+    status IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled')
+  )
+);
+
+-- ============================================================================
+-- IMPLEMENTATION LOGS TABLE
+-- ============================================================================
+
+CREATE TABLE public.implementation_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  implementation_id UUID REFERENCES public.implementations(id) NOT NULL,
+  step_id TEXT NOT NULL,
+  step_name TEXT NOT NULL,
+  step_order INTEGER,
+  status TEXT NOT NULL,
+  result_data JSONB,
+  message TEXT,
+  error_message TEXT,
+  error_stack TEXT,
+  attempt_number INTEGER DEFAULT 1,
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  duration_ms INTEGER,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT valid_status CHECK (
+    status IN ('pending', 'in_progress', 'completed', 'failed', 'skipped')
+  )
+);
+
+-- ============================================================================
+-- INDEXES
+-- ============================================================================
+
+CREATE INDEX idx_submissions_user_id ON onboarding_submissions(user_id);
+CREATE INDEX idx_submissions_status ON onboarding_submissions(status);
+CREATE INDEX idx_submissions_created_at ON onboarding_submissions(created_at DESC);
+
+CREATE INDEX idx_implementations_submission_id ON implementations(submission_id);
+CREATE INDEX idx_implementations_user_id ON implementations(user_id);
+CREATE INDEX idx_implementations_status ON implementations(status);
+CREATE INDEX idx_implementations_ghl_location_id ON implementations(ghl_location_id);
+
+CREATE INDEX idx_logs_implementation_id ON implementation_logs(implementation_id);
+CREATE INDEX idx_logs_step_id ON implementation_logs(step_id);
+CREATE INDEX idx_logs_status ON implementation_logs(status);
+CREATE INDEX idx_logs_created_at ON implementation_logs(created_at DESC);
+
+-- ============================================================================
+-- ROW LEVEL SECURITY (RLS)
+-- ============================================================================
+
+-- Enable RLS
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.onboarding_submissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.implementations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.implementation_logs ENABLE ROW LEVEL SECURITY;
+
+-- Profiles policies
+CREATE POLICY "Users can view own profile" 
+  ON public.profiles FOR SELECT 
+  USING (auth.uid() = id);
+
+CREATE POLICY "Users can update own profile" 
+  ON public.profiles FOR UPDATE 
+  USING (auth.uid() = id);
+
+-- Submissions policies
+CREATE POLICY "Users can view own submissions" 
+  ON public.onboarding_submissions FOR SELECT 
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can create own submissions" 
+  ON public.onboarding_submissions FOR INSERT 
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own submissions" 
+  ON public.onboarding_submissions FOR UPDATE 
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own submissions"
+  ON public.onboarding_submissions FOR DELETE
+  USING (auth.uid() = user_id);
+
+-- Implementations policies
+CREATE POLICY "Users can view own implementations" 
+  ON public.implementations FOR SELECT 
+  USING (auth.uid() = user_id);
+
+-- Logs policies
+CREATE POLICY "Users can view own implementation logs" 
+  ON public.implementation_logs FOR SELECT 
+  USING (
+    implementation_id IN (
+      SELECT id FROM public.implementations 
+      WHERE user_id = auth.uid()
+    )
+  );
+
+-- ============================================================================
+-- TRIGGERS
+-- ============================================================================
+
+-- Updated_at trigger function
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Apply to tables
+CREATE TRIGGER update_profiles_updated_at
+  BEFORE UPDATE ON public.profiles
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_submissions_updated_at
+  BEFORE UPDATE ON public.onboarding_submissions
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
+```
+
+### 3. Get API Keys
+
+1. Go to Project Settings > API
+2. Copy these values:
+   - `Project URL` → `NEXT_PUBLIC_SUPABASE_URL`
+   - `anon public` → `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `service_role` → `SUPABASE_SERVICE_ROLE_KEY` (keep secret!)
+
+---
+
+## GHL OAuth Setup
+
+### 1. Create GHL App
+
+1. Go to https://marketplace.gohighlevel.com/
+2. Click "Create App"
+3. Fill in app details:
+   - Name: Your app name
+   - Description: GHL Onboarding automation
+   - App URL: Your production URL
+4. Configure OAuth:
+   - Redirect URI: `https://yourapp.com/api/auth/ghl/callback`
+   - Scopes: Select all needed scopes
+5. Save and get:
+   - Client ID → `NEXT_PUBLIC_GHL_CLIENT_ID`
+   - Client Secret → `GHL_CLIENT_SECRET`
+
+---
+
+## Vercel Deployment
+
+### 1. Push to GitHub
+
+```bash
+git init
+git add .
+git commit -m "Initial commit"
+git remote add origin https://github.com/yourusername/ghl-onboarding-agent.git
+git push -u origin main
+```
+
+### 2. Connect to Vercel
+
+1. Go to https://vercel.com/new
+2. Import your GitHub repository
+3. Configure project:
+   - Framework Preset: Next.js
+   - Root Directory: `./`
+   - Build Command: `npm run build`
+   - Output Directory: (leave default)
+
+### 3. Add Environment Variables
+
+In Vercel Project Settings > Environment Variables, add:
+
+**Production:**
+```
+NEXT_PUBLIC_SUPABASE_URL=https://xxxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGci...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGci...
+NEXT_PUBLIC_GHL_CLIENT_ID=your_client_id
+GHL_CLIENT_SECRET=your_client_secret
+GHL_REDIRECT_URI=https://yourapp.vercel.app/api/auth/ghl/callback
+NEXT_PUBLIC_APP_URL=https://yourapp.vercel.app
+APP_VERSION=1.0.0
+```
+
+### 4. Deploy
+
+Click "Deploy" - Vercel will build and deploy your application.
+
+### 5. Custom Domain (Optional)
+
+1. Go to Project Settings > Domains
+2. Add your custom domain
+3. Configure DNS records as instructed
+4. Update environment variables with new domain
+
+---
+
+## Environment Configuration
+
+### Development vs Production
+
+**Development (.env.local):**
+```env
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+GHL_REDIRECT_URI=http://localhost:3000/api/auth/ghl/callback
+```
+
+**Production (Vercel):**
+```env
+NEXT_PUBLIC_APP_URL=https://yourapp.com
+GHL_REDIRECT_URI=https://yourapp.com/api/auth/ghl/callback
+```
+
+### Security Best Practices
+
+1. **Never commit secrets to Git**
+   - Add `.env.local` to `.gitignore`
+   - Use different keys for dev/prod
+
+2. **Rotate keys regularly**
+   - Change Supabase service role key every 90 days
+   - Rotate GHL client secret if compromised
+
+3. **Use Vercel environment variables**
+   - Never hardcode secrets in code
+   - Use environment-specific values
+
+---
+
+## Post-Deployment Testing
+
+### 1. Health Check
+
+```bash
+curl https://yourapp.com/api/health
+```
+
+Expected response:
+```json
+{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "services": {
+      "database": { "status": "up" },
+      "storage": { "status": "up" }
+    }
+  }
+}
+```
+
+### 2. Test Authentication Flow
+
+1. Sign up a test user
+2. Get JWT token
+3. Test authenticated endpoint:
+
+```bash
+curl https://yourapp.com/api/user/me \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### 3. Test GHL OAuth
+
+1. Visit: `https://yourapp.com/api/auth/ghl/authorize`
+2. Complete OAuth flow
+3. Check connection status:
+
+```bash
+curl https://yourapp.com/api/auth/ghl/status \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### 4. Test Form Submission
+
+```bash
+curl -X POST https://yourapp.com/api/form/submit \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "stage_number": 1,
+    "stage_data": {
+      "businessName": "Test Company",
+      "industry": "hvac"
+    }
+  }'
+```
+
+---
+
+## Monitoring Setup
+
+### 1. Vercel Analytics
+
+- Automatically enabled for all deployments
+- View at: https://vercel.com/dashboard/analytics
+
+### 2. Supabase Monitoring
+
+- Go to Supabase Dashboard > Database
+- Monitor query performance
+- Check table sizes
+- Review slow queries
+
+### 3. Error Tracking (Optional)
+
+**Sentry Setup:**
+
+```bash
+npm install @sentry/nextjs
+```
+
+```javascript
+// sentry.client.config.js
+import * as Sentry from '@sentry/nextjs';
+
+Sentry.init({
+  dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+  environment: process.env.VERCEL_ENV || 'development',
+  tracesSampleRate: 0.1,
+});
+```
+
+### 4. Uptime Monitoring
+
+Use services like:
+- UptimeRobot: https://uptimerobot.com
+- Better Uptime: https://betteruptime.com
+
+Monitor endpoint: `https://yourapp.com/api/health`
+
+---
+
+## Troubleshooting
+
+### Database Connection Issues
+
+**Problem:** "Failed to connect to database"
+
+**Solutions:**
+1. Check Supabase project is active
+2. Verify `NEXT_PUBLIC_SUPABASE_URL` is correct
+3. Check network connectivity
+4. Verify RLS policies allow access
+
+### GHL OAuth Fails
+
+**Problem:** "OAuth callback error"
+
+**Solutions:**
+1. Verify redirect URI matches exactly
+2. Check client ID and secret
+3. Ensure HTTPS is used (not HTTP)
+4. Verify GHL app is approved
+
+### Rate Limiting Issues
+
+**Problem:** "Rate limit exceeded"
+
+**Solutions:**
+1. Increase limits in `rate-limit.ts`
+2. Implement Redis-based rate limiting
+3. Add caching to reduce requests
+4. Use different API keys for different services
+
+### 500 Internal Server Error
+
+**Problem:** Generic server error
+
+**Solutions:**
+1. Check Vercel deployment logs
+2. Review Supabase logs
+3. Enable error tracking (Sentry)
+4. Check environment variables are set
+5. Verify database schema is correct
+
+---
+
+## Rollback Procedure
+
+If deployment fails or has critical bugs:
+
+### 1. Instant Rollback (Vercel)
+
+1. Go to Vercel Dashboard > Deployments
+2. Find last working deployment
+3. Click "Promote to Production"
+
+### 2. Database Rollback
+
+```sql
+-- If you need to revert schema changes
+-- Create backup first!
+pg_dump > backup.sql
+
+-- Revert changes
+-- (Manual SQL or migration tool)
+```
+
+### 3. Re-deploy Previous Version
+
+```bash
+git revert HEAD
+git push origin main
+```
+
+---
+
+## Maintenance
+
+### Regular Tasks
+
+**Weekly:**
+- Review error logs
+- Check API latency
+- Monitor database size
+
+**Monthly:**
+- Review rate limit effectiveness
+- Analyze usage metrics
+- Update dependencies
+
+**Quarterly:**
+- Rotate API keys
+- Review security policies
+- Performance optimization
+
+---
+
+## Scaling Considerations
+
+### When to Scale
+
+Monitor these metrics:
+- API latency > 500ms
+- Database CPU > 80%
+- Error rate > 1%
+- Request rate near limits
+
+### Scaling Options
+
+1. **Database:**
+   - Upgrade Supabase plan
+   - Add read replicas
+   - Optimize queries
+
+2. **API:**
+   - Vercel scales automatically
+   - Add caching layer (Redis)
+   - Implement CDN
+
+3. **Rate Limiting:**
+   - Move to Redis-based
+   - Implement tiered limits
+   - Add API key system
+
+---
+
+## Support
+
+For deployment issues:
+- GitHub Issues: [your-repo/issues]
+- Email: devops@yourapp.com
+- Docs: https://docs.yourapp.com
+
+---
+
+**Production Deployment Checklist:**
+
+- [ ] Supabase project created
+- [ ] Database schema deployed
+- [ ] RLS policies enabled
+- [ ] All indexes created
+- [ ] GHL OAuth app configured
+- [ ] Environment variables set in Vercel
+- [ ] GitHub repository connected
+- [ ] First deployment successful
+- [ ] Health check passes
+- [ ] Test user created
+- [ ] Authentication works
+- [ ] GHL OAuth tested
+- [ ] Form submission tested
+- [ ] Monitoring enabled
+- [ ] Error tracking configured
+- [ ] Uptime monitoring active
+- [ ] Documentation updated
+- [ ] Team notified
+
+**Congratulations! Your API is now live in production! 🎉**
