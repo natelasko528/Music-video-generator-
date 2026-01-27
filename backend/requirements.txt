@@ -1,0 +1,652 @@
+# AI Music Video Generator - Architectural Synthesis
+
+## Executive Summary
+
+Based on extensive research across 10 key technology domains, this document synthesizes architectural patterns for building a production-grade AI-powered music video generator. The system will enable users to upload songs, generate storyboards, create AI-powered video content, insert custom avatars, and interact conversationally with an AI agent throughout the workflow.
+
+---
+
+## Key Technology Stack Recommendations
+
+### 1. Audio Processing Pipeline
+
+**Primary Recommendation: Deepgram Nova-3**
+- **Rationale**: 30% lower WER than competitors, sub-300ms latency, best for real-time processing
+- **Cost**: $0.0043/minute (batch), $0.0077/minute (streaming)
+- **Capabilities**: Word-level timestamps, auto-punctuation, 36+ languages
+
+**Music Structure Detection: Separate ML Pipeline**
+- None of the STT APIs provide native music structure detection
+- **Solution**: Implement SpecTNT-based model or Spotify's structure detection API
+- **Output**: Verse, Chorus, Bridge, Intro, Outro, Instrumental classifications with timestamps
+
+**Hybrid Workflow**:
+```
+Audio Upload → Vocal Separation (Demucs/Spleeter) → Deepgram Transcription → 
+Fuzzy Matching with Official Lyrics → Music Structure Detection → 
+Timestamped Lyric Segments (Verse 1: 0:15-0:45, Chorus: 0:45-1:05, etc.)
+```
+
+---
+
+### 2. Video Generation Engine
+
+**Dual-Mode Architecture**
+
+**Mode 1: Google Veo 3.1 (Premium)**
+- **Strengths**: 
+  - Native audio-visual generation (lip-sync, sound effects)
+  - 1080p at 24fps
+  - 4-8 second clips (extendable to 1+ minute via Scene Extension)
+  - Professional cinematic quality
+  - Best for commercial productions
+  
+- **Limitations**:
+  - Strict safety filters (requires auto-sanitize loop)
+  - 3-5 minute generation time per clip
+  - Cost: ~$50-150 per 3-minute music video
+  - Requires Google Cloud billing
+
+**Mode 2: CogVideoX-5B (Open Source Alternative)**
+- **Strengths**:
+  - 10-second continuous videos (longest in open-source)
+  - State-of-the-art quality on VBench++ benchmark
+  - Apache 2.0 license (commercial use allowed)
+  - Self-hosted control
+  - Superior motion consistency
+  
+- **Requirements**:
+  - 4.4-5 GB VRAM (optimized BF16)
+  - RTX 3060+ recommended
+  - 180s generation time on A100 (90s on H100)
+  - Resolution up to 1360 × 768
+
+**Fallback Chain**: Veo 3.1 → CogVideoX-5B → Zeroscope v2 XL (if GPU constraints)
+
+---
+
+### 3. Storyboard Generation
+
+**Multi-Tool Strategy for Optimal Quality**
+
+**Primary: Midjourney API (via wrapper)**
+- Best cinematographic composition control
+- Excellent shot type specifications
+- New video generation capability (image-to-video)
+- Ideal for hero/emotional beats
+
+**Secondary: DALL-E 3**
+- Professional-grade image quality
+- Excellent prompt adherence
+- Batch processing via OpenAI API
+- Great for client presentations
+
+**Tertiary: Stable Diffusion**
+- Cost-effective for high-volume generation
+- Good for secondary/transition frames
+- Self-hosted option for privacy
+- Image-to-image workflow for continuity
+
+**Workflow**:
+```
+Song Structure Analysis → Generate Scene Descriptions (via LLM) → 
+Midjourney for key frames → DALL-E 3 for variations → 
+Stable Diffusion for transitions → Preview Storyboard Timeline
+```
+
+---
+
+### 4. Avatar & Face Swapping
+
+**Modern Solution: ReActor (ComfyUI Node)**
+
+**Why ReActor over Legacy Tools**:
+- ✅ Active development (Roop/DeepFaceLab archived)
+- ✅ ComfyUI integration (visual workflow)
+- ✅ Multiple model support: Inswapper, ReSwapper, HyperSwap
+- ✅ Advanced features: Gender detection, mask-guided swapping
+- ✅ Face restoration: GFPGAN, CodeFormer, GPEN (up to 2048px)
+- ✅ GPU acceleration for CUDA 12
+
+**Alternative: InsightFace (Python Library)**
+- 27,000+ GitHub stars
+- State-of-the-art face recognition
+- Commercial licensing available
+- INSwapper models for production use
+
+**Integration Pattern**:
+```
+User uploads face images → Create face model → 
+Generate video clips with Veo/CogVideo → 
+Apply ReActor face swap → Face restoration → 
+Final video with user avatar
+```
+
+**Hardware Requirements**:
+- Minimum: 8GB VRAM
+- Recommended: 12GB+ VRAM
+- Processing: Minutes per video on GPU
+
+---
+
+### 5. Conversational AI Agent Architecture
+
+**LangGraph Multi-Agent System (Jockey Pattern)**
+
+**Agent Hierarchy**:
+
+```
+┌─────────────────────────────────────────────────────┐
+│              SUPERVISOR AGENT                       │
+│  (Routes tasks, manages workflow, coordinates)      │
+└─────────────────────────────────────────────────────┘
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+┌───────▼──────┐ ┌──────▼────────┐ ┌────▼─────────┐
+│   PLANNER    │ │  INSTRUCTOR   │ │   WORKERS    │
+│              │ │               │ │              │
+│ Creates      │ │ Generates     │ │ Specialized: │
+│ step-by-step │ │ precise task  │ │ - Storyboard │
+│ plans        │ │ instructions  │ │ - Video Gen  │
+│              │ │               │ │ - Face Swap  │
+│              │ │               │ │ - Editor     │
+└──────────────┘ └───────────────┘ └──────────────┘
+```
+
+**Key Capabilities**:
+- **Persistence**: Store state across conversations
+- **Interrupts**: Pause for human review/approval
+- **Time Travel**: Edit and resume agent actions
+- **Double-texting**: Handle new inputs on running threads
+- **Context Management**: 39% improvement with memory tools
+
+**State Management (3-Tier)**:
+1. **Session State**: Current project, timeline, recent commands
+2. **Memory**: Editing preferences, user patterns, learned behaviors
+3. **Persistent Storage**: Project histories, templates, knowledge base
+
+**Natural Language Commands**:
+- "Cut out the section from 1:45 to 2:15 where there's no vocals"
+- "Make the chorus more energetic with faster cuts"
+- "Add my face to the performer in scenes 3-7"
+- "Generate a storyboard for a moody, noir aesthetic"
+- "Change the lighting in scene 4 to warm sunset tones"
+
+---
+
+### 6. Video Playback & Timeline Engine
+
+**Dual-Layer HTML5 Video Player (Director's Cut Pattern)**
+
+**Architecture**:
+```
+┌──────────────────────────────────────────────────┐
+│  Layer 1 (Foreground) - Currently Playing       │
+│  <video id="player1" opacity: 1>                │
+└──────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  Layer 2 (Background) - Preloading Next Clip    │
+│  <video id="player2" opacity: 0>                │
+└──────────────────────────────────────────────────┘
+```
+
+**Zero-Latency Transition Logic**:
+1. Layer 1 plays Scene A
+2. Layer 2 loads Scene B (`preload="auto"`)
+3. At T-1s (for crossfade), Layer 2 starts playing silently
+4. CSS transitions swap opacity: Layer 1 (1→0), Layer 2 (0→1)
+5. Layer 1 pauses and loads Scene C
+
+**Transition Types**:
+- Hard Cut: Instant switch
+- Crossfade: 1-second dissolve
+- Fade to Black: Cinematic dip
+
+**Buffering Strategy**:
+- Adaptive Bitrate (ABR) with SODA algorithm
+- 8-30 second buffer sweet spot
+- Predictive preloading based on playback trajectory
+- 0-1 second buffering = 95% viewer retention
+
+---
+
+### 7. Video Processing & Editing Backend
+
+**FFmpeg Programmatic Control**
+
+**Core Capabilities**:
+- **Scene Transitions**: `xfade` filter with 20+ transition types
+- **Audio-Video Sync**: PTS/DTS management with `aresample=async=1`
+- **Timeline Assembly**: Complex filter graphs with temporal enable expressions
+- **Batch Processing**: Python wrapper (ffmpeg-python) for automation
+
+**Python Integration Stack**:
+```python
+import ffmpeg
+
+# Concat with transitions
+(
+    ffmpeg
+    .input('clip1.mp4')
+    .video
+    .filter('xfade', transition='fade', duration=0.5, offset=5)
+    .output('output.mp4')
+)
+```
+
+**Performance Optimization**:
+- GPU acceleration: `h264_nvenc` (NVIDIA), `h264_videotoolbox` (Apple)
+- Thread count: `-threads 8` (adjust per CPU)
+- Preset: `fast` for balance, `slow` for quality
+
+---
+
+### 8. Real-Time Collaborative Editing
+
+**Yjs CRDT + WebSocket Architecture**
+
+**Why Yjs**:
+- 900k+ weekly downloads
+- Automatic conflict resolution
+- Peer-to-peer and client-server modes
+- Built-in Awareness CRDT for presence
+
+**State Structure**:
+```javascript
+const ydoc = new Y.Doc()
+const timeline = ydoc.getArray('timeline')  // Clips array
+const clipProperties = ydoc.getMap('clips') // Clip metadata
+const presence = new Awareness(ydoc)        // Cursors/presence
+```
+
+**Network Layer**:
+- **y-websocket** provider with exponential backoff reconnection
+- Server maintains single source of truth
+- Binary protocol for compressed updates
+- Separate channel for presence (low-latency)
+
+**Multiplayer Features**:
+- Live cursor positions
+- Real-time timeline updates
+- Smart conflict resolution
+- Version history (time-travel)
+- @mentions in time-coded comments
+
+---
+
+### 9. Music Video Production Workflow Integration
+
+**Industry-Standard Pre-Production Process**
+
+**Phase 1: Treatment & Concept (AI-Assisted)**
+- User provides song + mood/style preferences
+- AI generates treatment document
+- Multiple style options presented
+- User selects or refines
+
+**Phase 2: Beat Analysis & Timing**
+- Automatic beat detection and mapping
+- Song structure identification (verse/chorus/bridge)
+- Timing sheet with musical sections
+- Beat-precise visual timing markers
+
+**Phase 3: Shot List Generation**
+- AI generates shot list based on lyrics and mood
+- Shot types: Wide, Medium, Close-up, Extreme Close-up
+- Camera movements: Dolly, tracking, crane, pan, tilt
+- Grouped by setup and location
+- Estimated duration per shot
+
+**Phase 4: Storyboard Creation**
+- Visual panels for each shot
+- AV script aligned with lyrics
+- Shot composition and framing notes
+- Lighting and effects specifications
+- Export as animatic for preview
+
+**Phase 5: Production (AI Video Generation)**
+- Batch render all scenes
+- Safety auto-fix for rejected prompts
+- Progress tracking with thumbnails
+- Quality review and regeneration
+
+**Phase 6: Post-Production**
+- Timeline assembly
+- Transition application
+- Audio-video synchronization
+- Color grading (optional)
+- Face swap integration
+- Final export
+
+---
+
+## System Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER INTERFACE                          │
+│  (React/Next.js + TailwindCSS + Framer Motion)                 │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                 CONVERSATIONAL AI AGENT LAYER                   │
+│  LangGraph Multi-Agent System (Supervisor + Workers)            │
+│  - Natural Language Understanding                               │
+│  - Task Planning & Orchestration                               │
+│  - State Management (Session + Memory + Persistent)            │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+         ┌───────────────────┼───────────────────┐
+         │                   │                   │
+┌────────▼────────┐  ┌──────▼──────┐  ┌────────▼────────┐
+│  AUDIO ENGINE   │  │VIDEO ENGINE │  │ AVATAR ENGINE   │
+│                 │  │             │  │                 │
+│ - Deepgram API  │  │ - Veo 3.1   │  │ - ReActor       │
+│ - Demucs Vocal  │  │ - CogVideoX │  │ - InsightFace   │
+│   Separation    │  │ - Zeroscope │  │ - Face Models   │
+│ - Music         │  │             │  │                 │
+│   Structure     │  │             │  │                 │
+│   Detection     │  │             │  │                 │
+└─────────────────┘  └─────────────┘  └─────────────────┘
+         │                   │                   │
+         └───────────────────┼───────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                   STORYBOARD GENERATION                         │
+│  - Midjourney API (hero frames)                                │
+│  - DALL-E 3 (variations)                                       │
+│  - Stable Diffusion (transitions)                              │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                   VIDEO PROCESSING LAYER                        │
+│  - FFmpeg (transitions, sync, assembly)                        │
+│  - GPU Acceleration (NVENC/VideoToolbox)                       │
+│  - Batch Processing Pipeline                                   │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                    PLAYBACK & PREVIEW                           │
+│  - Dual-Layer HTML5 Video Player                               │
+│  - Zero-Latency Transitions                                    │
+│  - Adaptive Bitrate Streaming                                  │
+│  - Real-time Preview Timeline                                  │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                 COLLABORATIVE FEATURES                          │
+│  - Yjs CRDT for state sync                                     │
+│  - WebSocket real-time updates                                 │
+│  - Presence awareness                                          │
+│  - Version history                                             │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                      DATA LAYER                                 │
+│  - PostgreSQL (projects, users, settings)                      │
+│  - Redis (sessions, cache, job queues)                         │
+│  - S3-compatible storage (videos, assets, models)              │
+│  - Vector DB (embeddings for AI memory)                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Key Design Patterns
+
+### 1. Auto-Sanitize Loop (Veo Safety Handling)
+
+```
+User Prompt → Veo Generation → Success? → Save Video
+                      ↓ (Safety Error)
+              Gemini 3.0 Rewrite → Metaphorical Prompt → Retry
+                      ↓ (Max 3 attempts)
+              Fallback to CogVideoX or User Notification
+```
+
+### 2. Progressive Enhancement Pipeline
+
+```
+Low Res Preview (Fast) → Medium Quality (Interactive) → 
+High Res Final (Export)
+```
+
+- Users can preview and edit with fast proxies
+- Final export triggers high-quality regeneration
+- Reduces iteration time from minutes to seconds
+
+### 3. Modular Agent Architecture
+
+Each capability is a separate agent that can be invoked independently or as part of a workflow:
+
+- **StoryboardAgent**: Generates shot lists and visual concepts
+- **VideoGenAgent**: Handles video generation with retry logic
+- **FaceSwapAgent**: Processes avatar insertion
+- **EditorAgent**: Applies edits and transitions
+- **ExportAgent**: Orchestrates final rendering
+
+### 4. Context-Aware AI Assistance
+
+The AI agent maintains context across the entire workflow:
+
+```
+Session Context:
+├── Current Project ID
+├── Song Analysis (structure, mood, tempo)
+├── Selected Art Style
+├── Generated Storyboard
+├── Video Clips Status
+├── User Preferences
+└── Edit History
+```
+
+This enables natural commands like:
+- "Make it more energetic" (AI knows current project context)
+- "Use my face from the last upload" (AI remembers assets)
+- "Apply the same style to scene 5" (AI understands references)
+
+---
+
+## Technology Comparison Matrix
+
+### Audio Transcription
+
+| Feature | Whisper | AssemblyAI | Deepgram |
+|---------|---------|------------|----------|
+| **Accuracy** | Good | Good | Best |
+| **Latency** | Medium | Medium | Lowest (300ms) |
+| **Cost/min** | $0.006 | $0.0025 | $0.0043 |
+| **Music-specific** | Fair | Fair | Best |
+| **Recommendation** | Backup | Cost-conscious | **Primary** |
+
+### Video Generation
+
+| Feature | Veo 3.1 | CogVideoX-5B | Zeroscope XL |
+|---------|---------|--------------|--------------|
+| **Quality** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Clip Length** | 4-8s (extend 1min+) | 10s | 4s |
+| **Native Audio** | ✅ Yes | ❌ No | ❌ No |
+| **Cost** | $$$ | Free (GPU) | Free (GPU) |
+| **Commercial Use** | ✅ | ✅ Apache 2.0 | ✅ |
+| **Recommendation** | **Premium** | **Open Source** | Fallback |
+
+### Storyboard Generation
+
+| Feature | Midjourney | DALL-E 3 | Stable Diffusion |
+|---------|------------|----------|------------------|
+| **Quality** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Cinematography** | Best | Excellent | Good |
+| **Cost per image** | $$$ | $$ | $ (self-hosted) |
+| **Batch Processing** | API wrapper | Native API | Self-hosted |
+| **Recommendation** | **Hero frames** | **Variations** | **Transitions** |
+
+### Face Swapping
+
+| Feature | ReActor | InsightFace | Roop (Legacy) |
+|---------|---------|-------------|---------------|
+| **Active Dev** | ✅ Yes | ✅ Yes | ❌ Archived |
+| **Quality** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **Integration** | ComfyUI | Python API | Standalone |
+| **Face Restore** | ✅ Built-in | ✅ Available | ❌ No |
+| **Recommendation** | **Primary** | **Alternative** | Avoid |
+
+---
+
+## Performance Benchmarks
+
+### Expected Processing Times (3-minute music video, ~30 clips)
+
+**Veo 3.1 Mode**:
+- Storyboard generation: 5-10 minutes
+- Video generation: 90-150 minutes (30 clips × 3-5 min each)
+- Face swapping (if used): 15-30 minutes
+- Final assembly: 5-10 minutes
+- **Total: ~2-3 hours**
+
+**CogVideoX-5B Mode (A100 GPU)**:
+- Storyboard generation: 5-10 minutes
+- Video generation: 90 minutes (30 clips × 3 min each)
+- Face swapping (if used): 15-30 minutes
+- Final assembly: 5-10 minutes
+- **Total: ~2 hours**
+
+**CogVideoX-2B Mode (RTX 3060)**:
+- Storyboard generation: 5-10 minutes
+- Video generation: 45 minutes (30 clips × 1.5 min each)
+- Face swapping (if used): 20-40 minutes
+- Final assembly: 5-10 minutes
+- **Total: ~1.5 hours**
+
+### Cost Estimates (per 3-minute video)
+
+**Veo 3.1 Mode**:
+- Video generation: $50-150
+- Storyboard (Midjourney): $10-20
+- Audio transcription: $0.01
+- **Total: ~$60-170**
+
+**CogVideoX Mode (Self-hosted)**:
+- GPU compute: $5-10 (cloud) or $0 (owned hardware)
+- Storyboard (Stable Diffusion): $0-5
+- Audio transcription: $0.01
+- **Total: ~$5-15**
+
+---
+
+## Scalability Considerations
+
+### Horizontal Scaling Points
+
+1. **Video Generation Workers**: Queue-based job processing
+2. **Storyboard Generation**: Parallel image generation
+3. **Face Swapping**: GPU worker pool
+4. **WebSocket Servers**: Load-balanced real-time connections
+5. **Storage**: CDN for asset delivery
+
+### Vertical Scaling Points
+
+1. **GPU Instances**: More powerful GPUs for faster generation
+2. **Database**: Read replicas for query performance
+3. **Redis Cluster**: Distributed cache and sessions
+4. **Job Queue**: Multi-node job processing
+
+### Resource Requirements
+
+**Minimum Viable System**:
+- 1× Web server (2 vCPU, 4GB RAM)
+- 1× GPU worker (RTX 3060, 12GB VRAM)
+- 1× PostgreSQL (2 vCPU, 4GB RAM)
+- 1× Redis (1 vCPU, 2GB RAM)
+- 100GB storage
+
+**Production Scale (100 concurrent users)**:
+- 3× Web servers (4 vCPU, 8GB RAM each)
+- 5× GPU workers (A100 or RTX 4090)
+- 2× PostgreSQL (8 vCPU, 16GB RAM, master + replica)
+- 3× Redis cluster nodes
+- 5TB storage + CDN
+
+---
+
+## Security & Safety Considerations
+
+### Content Safety
+
+1. **Input Validation**: Audio file type/size limits, malware scanning
+2. **Prompt Safety**: Auto-sanitize loop for Veo, content policy enforcement
+3. **Face Upload**: Consent requirements, age verification for avatar use
+4. **Output Moderation**: AI-powered content review before publish
+
+### Data Privacy
+
+1. **User Data**: Encryption at rest and in transit
+2. **Face Models**: User-specific, isolated storage with auto-deletion options
+3. **Project Privacy**: Public/private project settings
+4. **API Keys**: Secure vault storage, never client-side
+
+### Rate Limiting
+
+1. **Video Generation**: 10 videos per day (free), unlimited (premium)
+2. **Storyboard**: 50 generations per day
+3. **API Calls**: 1000 requests per hour per user
+4. **WebSocket**: 100 messages per second per connection
+
+---
+
+## Deployment Architecture
+
+### Development Environment
+- Local GPU (RTX 3060+) for CogVideoX testing
+- Veo 3.1 via Google Cloud staging project
+- PostgreSQL + Redis via Docker
+- Hot reload for rapid iteration
+
+### Staging Environment
+- Cloud GPU (Lambda Labs, RunPod, or vast.ai)
+- Managed PostgreSQL (Supabase or Railway)
+- Managed Redis (Upstash or Railway)
+- S3-compatible storage (Cloudflare R2)
+- Preview domain with basic auth
+
+### Production Environment
+- Multi-region GPU workers (auto-scaling)
+- PostgreSQL with read replicas
+- Redis cluster with persistence
+- CDN for global asset delivery
+- Load balancer with SSL
+- Monitoring: Sentry (errors) + Grafana (metrics)
+
+---
+
+## Risk Mitigation
+
+### Technical Risks
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Veo API downtime | High | Fallback to CogVideoX automatically |
+| GPU unavailability | High | Queue system with wait time estimates |
+| Storage costs | Medium | Compression, auto-deletion of old projects |
+| Safety filter false positives | Medium | Auto-sanitize loop + manual override |
+| Real-time sync lag | Low | Exponential backoff, graceful degradation |
+
+### Business Risks
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| API cost overruns | High | Usage caps, cost monitoring, alerts |
+| Copyright issues | High | Terms requiring user-owned content |
+| DMCA takedowns | Medium | Automated takedown process |
+| Compute costs | Medium | Spot instances, GPU optimization |
+
+---
+
+## Next Steps
+
+This architectural synthesis informs:
+1. **Comprehensive PRD** with feature specifications
+2. **Technical Architecture Document** with implementation details
+3. **Phased Implementation Plan** with milestones and timelines
+
+All three documents will reference this synthesis as the foundational research base.
