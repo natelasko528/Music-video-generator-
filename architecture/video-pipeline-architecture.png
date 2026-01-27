@@ -1,0 +1,779 @@
+# Testing Guide - GHL Onboarding Agent
+
+## Comprehensive Testing Documentation
+
+This guide covers all testing strategies, test suites, and quality assurance procedures for the GHL Onboarding Agent.
+
+---
+
+## 📋 **Table of Contents**
+
+1. [Testing Overview](#testing-overview)
+2. [Unit Testing](#unit-testing)
+3. [Integration Testing](#integration-testing)
+4. [End-to-End Testing](#end-to-end-testing)
+5. [API Testing](#api-testing)
+6. [Load Testing](#load-testing)
+7. [Security Testing](#security-testing)
+8. [Test Data Management](#test-data-management)
+9. [CI/CD Integration](#cicd-integration)
+10. [Troubleshooting Tests](#troubleshooting-tests)
+
+---
+
+## 🎯 **Testing Overview**
+
+### **Testing Philosophy**
+
+Our testing strategy follows the **Testing Pyramid**:
+- **70% Unit Tests** - Fast, isolated, high coverage
+- **20% Integration Tests** - Component interactions
+- **10% E2E Tests** - Critical user flows
+
+### **Test Coverage Goals**
+
+- **Overall:** 80%+ coverage
+- **Critical paths:** 95%+ coverage
+- **Business logic:** 90%+ coverage
+- **UI components:** 70%+ coverage
+
+### **Testing Stack**
+
+- **Unit/Integration:** Jest + React Testing Library
+- **E2E:** Playwright
+- **API:** Supertest
+- **Load:** Artillery
+- **Security:** OWASP ZAP, npm audit
+
+---
+
+## 🧪 **Unit Testing**
+
+### **Setup**
+
+Unit tests use **Jest** and **React Testing Library**.
+
+**Run tests:**
+```bash
+# Run all tests
+npm test
+
+# Run with coverage
+npm run test:coverage
+
+# Run in watch mode
+npm run test:watch
+
+# Run specific file
+npm test Stage1Form.test.tsx
+```
+
+### **Test Structure**
+
+```typescript
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { Stage1Form } from '@/components/forms/Stage1Form';
+
+describe('Stage1Form', () => {
+  it('should render all form fields', () => {
+    render(<Stage1Form />);
+    
+    expect(screen.getByLabelText(/company name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/industry/i)).toBeInTheDocument();
+  });
+  
+  it('should validate required fields', async () => {
+    render(<Stage1Form />);
+    
+    const submitButton = screen.getByRole('button', { name: /continue/i });
+    fireEvent.click(submitButton);
+    
+    await waitFor(() => {
+      expect(screen.getByText(/company name is required/i)).toBeInTheDocument();
+    });
+  });
+});
+```
+
+### **Frontend Unit Tests**
+
+**Form Validation Tests** (`src/__tests__/validations/stage1.test.ts`)
+
+```typescript
+import { stage1Schema } from '@/lib/validations/stage1';
+
+describe('Stage 1 Validation', () => {
+  it('should accept valid company data', () => {
+    const validData = {
+      companyName: 'Acme Corp',
+      industry: 'technology',
+      employees: '11-50',
+      website: 'https://acme.com',
+      description: 'Software company'
+    };
+    
+    const result = stage1Schema.safeParse(validData);
+    expect(result.success).toBe(true);
+  });
+  
+  it('should reject invalid email format', () => {
+    const invalidData = {
+      companyName: 'Acme',
+      contactEmail: 'not-an-email'
+    };
+    
+    const result = stage1Schema.safeParse(invalidData);
+    expect(result.success).toBe(false);
+    expect(result.error.issues[0].path).toContain('contactEmail');
+  });
+});
+```
+
+**Component Tests** (`src/__tests__/components/`)
+
+```typescript
+describe('ProgressIndicator', () => {
+  it('should highlight current stage', () => {
+    render(<ProgressIndicator currentStage={2} totalStages={5} />);
+    
+    const stage2 = screen.getByText('2');
+    expect(stage2).toHaveClass('bg-purple-600');
+  });
+  
+  it('should mark completed stages', () => {
+    render(<ProgressIndicator currentStage={3} totalStages={5} />);
+    
+    const stage1 = screen.getByText('1');
+    expect(stage1).toHaveClass('bg-green-500');
+  });
+});
+```
+
+### **Backend Unit Tests**
+
+**API Route Tests** (`src/app/api/__tests__/`)
+
+```typescript
+import { POST } from '@/app/api/form/submit/route';
+import { NextRequest } from 'next/server';
+
+describe('/api/form/submit', () => {
+  it('should create form submission', async () => {
+    const request = new NextRequest('http://localhost/api/form/submit', {
+      method: 'POST',
+      body: JSON.stringify({
+        stage: 1,
+        data: { companyName: 'Test' }
+      })
+    });
+    
+    const response = await POST(request);
+    const data = await response.json();
+    
+    expect(response.status).toBe(201);
+    expect(data.formId).toBeDefined();
+  });
+});
+```
+
+**GHL Client Tests** (`lib/ghl/__tests__/ghl-client.test.ts`)
+
+```typescript
+import { GHLClient } from '../GHLClient';
+
+describe('GHLClient', () => {
+  let client: GHLClient;
+  
+  beforeEach(() => {
+    client = new GHLClient({
+      clientId: 'test-id',
+      clientSecret: 'test-secret'
+    });
+  });
+  
+  it('should generate authorization URL', () => {
+    const url = client.getAuthorizationUrl('state123');
+    
+    expect(url).toContain('oauth/authorize');
+    expect(url).toContain('client_id=test-id');
+    expect(url).toContain('state=state123');
+  });
+  
+  it('should handle token refresh', async () => {
+    const mockFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 'new-token' })
+    });
+    global.fetch = mockFetch;
+    
+    const newToken = await client.refreshAccessToken('old-refresh-token');
+    
+    expect(newToken).toBe('new-token');
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/oauth/token'),
+      expect.objectContaining({
+        method: 'POST'
+      })
+    );
+  });
+});
+```
+
+---
+
+## 🔗 **Integration Testing**
+
+Integration tests verify that multiple components work together correctly.
+
+### **Database Integration Tests**
+
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+describe('Form Submission Integration', () => {
+  let supabase;
+  
+  beforeAll(() => {
+    supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+  });
+  
+  it('should save form and create GHL record', async () => {
+    // Submit form
+    const response = await fetch('/api/form/submit', {
+      method: 'POST',
+      body: JSON.stringify({
+        stage: 1,
+        data: { companyName: 'Test Corp' }
+      })
+    });
+    
+    const { formId } = await response.json();
+    
+    // Verify in database
+    const { data } = await supabase
+      .from('form_submissions')
+      .select('*')
+      .eq('id', formId)
+      .single();
+    
+    expect(data).toBeDefined();
+    expect(data.data.companyName).toBe('Test Corp');
+  });
+});
+```
+
+### **GHL OAuth Flow Integration Test**
+
+```typescript
+describe('GHL OAuth Integration', () => {
+  it('should complete full OAuth flow', async () => {
+    // 1. Get authorization URL
+    const authResponse = await fetch('/api/auth/ghl/authorize');
+    const { url } = await authResponse.json();
+    expect(url).toContain('oauth/authorize');
+    
+    // 2. Simulate callback with code
+    const callbackResponse = await fetch('/api/auth/ghl/callback?code=test-code&state=test-state');
+    expect(callbackResponse.status).toBe(200);
+    
+    // 3. Verify token stored
+    const { data } = await supabase
+      .from('ghl_tokens')
+      .select('access_token')
+      .single();
+    
+    expect(data.access_token).toBeDefined();
+  });
+});
+```
+
+---
+
+## 🌐 **End-to-End Testing**
+
+E2E tests use **Playwright** to simulate real user interactions.
+
+### **Setup Playwright**
+
+```bash
+# Install Playwright
+npm install -D @playwright/test
+
+# Install browsers
+npx playwright install
+
+# Run E2E tests
+npm run test:e2e
+```
+
+### **E2E Test Examples**
+
+**Complete Onboarding Flow** (`e2e/onboarding-flow.spec.ts`)
+
+```typescript
+import { test, expect } from '@playwright/test';
+
+test.describe('Complete Onboarding Flow', () => {
+  test('should complete all 5 stages', async ({ page }) => {
+    await page.goto('/onboarding/stage-1');
+    
+    // Stage 1: Company Information
+    await page.fill('[name="companyName"]', 'Test Company');
+    await page.selectOption('[name="industry"]', 'technology');
+    await page.fill('[name="employees"]', '11-50');
+    await page.fill('[name="website"]', 'https://test.com');
+    await page.click('button[type="submit"]');
+    
+    // Verify navigation to Stage 2
+    await expect(page).toHaveURL('/onboarding/stage-2');
+    
+    // Stage 2: Contact Information
+    await page.fill('[name="firstName"]', 'John');
+    await page.fill('[name="lastName"]', 'Doe');
+    await page.fill('[name="email"]', 'john@test.com');
+    await page.fill('[name="phone"]', '+1234567890');
+    await page.click('button[type="submit"]');
+    
+    // Continue through remaining stages...
+    
+    // Final verification
+    await expect(page).toHaveURL('/onboarding/complete');
+    await expect(page.getByText(/thank you/i)).toBeVisible();
+  });
+  
+  test('should save progress on navigation away', async ({ page }) => {
+    await page.goto('/onboarding/stage-1');
+    
+    // Fill partial data
+    await page.fill('[name="companyName"]', 'Draft Company');
+    
+    // Navigate away
+    await page.goto('/');
+    
+    // Return to form
+    await page.goto('/onboarding/stage-1');
+    
+    // Verify data persisted
+    const companyName = await page.inputValue('[name="companyName"]');
+    expect(companyName).toBe('Draft Company');
+  });
+});
+```
+
+**GHL Connection Flow** (`e2e/ghl-oauth.spec.ts`)
+
+```typescript
+test.describe('GHL OAuth Connection', () => {
+  test('should connect GHL account', async ({ page, context }) => {
+    await page.goto('/dashboard/settings');
+    
+    // Click connect button
+    const [popup] = await Promise.all([
+      context.waitForEvent('page'),
+      page.click('text=Connect GoHighLevel')
+    ]);
+    
+    // Wait for OAuth page
+    await popup.waitForLoadState();
+    expect(popup.url()).toContain('oauth/authorize');
+    
+    // Fill credentials (in test environment)
+    await popup.fill('[name="email"]', process.env.TEST_GHL_EMAIL!);
+    await popup.fill('[name="password"]', process.env.TEST_GHL_PASSWORD!);
+    await popup.click('button[type="submit"]');
+    
+    // Wait for redirect back
+    await page.waitForURL('/dashboard/settings?connected=true');
+    
+    // Verify connection status
+    await expect(page.getByText(/connected/i)).toBeVisible();
+  });
+});
+```
+
+---
+
+## 🔌 **API Testing**
+
+### **API Test Suite** (`tests/api/api.test.ts`)
+
+```typescript
+import request from 'supertest';
+import { app } from '@/server'; // If using custom server
+
+describe('Form API Endpoints', () => {
+  describe('POST /api/form/submit', () => {
+    it('should accept valid submission', async () => {
+      const response = await request(app)
+        .post('/api/form/submit')
+        .send({
+          stage: 1,
+          data: { companyName: 'Test' }
+        })
+        .expect(201);
+      
+      expect(response.body.formId).toBeDefined();
+    });
+    
+    it('should reject invalid data', async () => {
+      const response = await request(app)
+        .post('/api/form/submit')
+        .send({
+          stage: 1,
+          data: {} // Missing required fields
+        })
+        .expect(400);
+      
+      expect(response.body.errors).toBeDefined();
+    });
+    
+    it('should require authentication', async () => {
+      await request(app)
+        .post('/api/form/submit')
+        .send({ stage: 1, data: {} })
+        .expect(401);
+    });
+  });
+  
+  describe('GET /api/form/:id', () => {
+    it('should retrieve form by ID', async () => {
+      // Create form first
+      const createResponse = await request(app)
+        .post('/api/form/submit')
+        .send({ stage: 1, data: { companyName: 'Test' } });
+      
+      const formId = createResponse.body.formId;
+      
+      // Retrieve it
+      const response = await request(app)
+        .get(`/api/form/${formId}`)
+        .expect(200);
+      
+      expect(response.body.data.companyName).toBe('Test');
+    });
+  });
+});
+```
+
+### **GHL API Integration Tests**
+
+```typescript
+describe('GHL API Operations', () => {
+  let accessToken: string;
+  
+  beforeAll(async () => {
+    // Get test token
+    accessToken = await getTestGHLToken();
+  });
+  
+  it('should create contact', async () => {
+    const response = await request(app)
+      .post('/api/ghl/contacts')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        firstName: 'Test',
+        lastName: 'User',
+        email: 'test@example.com'
+      })
+      .expect(201);
+    
+    expect(response.body.contactId).toBeDefined();
+  });
+  
+  it('should create subaccount', async () => {
+    const response = await request(app)
+      .post('/api/ghl/subaccounts')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        name: 'Test Subaccount',
+        address: '123 Test St'
+      })
+      .expect(201);
+    
+    expect(response.body.subaccountId).toBeDefined();
+  });
+});
+```
+
+---
+
+## ⚡ **Load Testing**
+
+### **Artillery Configuration** (`artillery.yml`)
+
+```yaml
+config:
+  target: "https://your-app.vercel.app"
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm up"
+    - duration: 120
+      arrivalRate: 20
+      name: "Sustained load"
+    - duration: 60
+      arrivalRate: 50
+      name: "Spike test"
+  processor: "./test-processor.js"
+
+scenarios:
+  - name: "Form Submission Flow"
+    flow:
+      - post:
+          url: "/api/form/submit"
+          json:
+            stage: 1
+            data:
+              companyName: "Load Test {{ $randomString() }}"
+              industry: "technology"
+          capture:
+            - json: "$.formId"
+              as: "formId"
+      - get:
+          url: "/api/form/{{ formId }}"
+      - think: 2
+      - post:
+          url: "/api/form/{{ formId }}/stage/2"
+          json:
+            stage: 2
+            data:
+              firstName: "Test"
+              lastName: "User"
+```
+
+**Run load tests:**
+```bash
+# Install Artillery
+npm install -g artillery
+
+# Run test
+artillery run artillery.yml
+
+# Generate report
+artillery run --output report.json artillery.yml
+artillery report report.json
+```
+
+---
+
+## 🔒 **Security Testing**
+
+### **Automated Security Scanning**
+
+```bash
+# Check for vulnerable dependencies
+npm audit
+
+# Fix vulnerabilities
+npm audit fix
+
+# Run OWASP ZAP scan
+docker run -t owasp/zap2docker-stable zap-baseline.py \
+  -t https://your-app.vercel.app
+```
+
+### **Security Test Checklist**
+
+- [ ] **Authentication**: Test unauthorized access
+- [ ] **Authorization**: Test privilege escalation
+- [ ] **Input Validation**: Test SQL injection, XSS
+- [ ] **CSRF Protection**: Verify CSRF tokens
+- [ ] **Rate Limiting**: Test API rate limits
+- [ ] **Secrets**: Ensure no secrets in logs/responses
+- [ ] **HTTPS**: Verify all connections use HTTPS
+- [ ] **Headers**: Check security headers (CSP, HSTS, etc.)
+
+### **Manual Security Tests**
+
+**SQL Injection Test:**
+```bash
+curl -X POST https://your-app.vercel.app/api/form/submit \
+  -H "Content-Type: application/json" \
+  -d '{"stage": 1, "data": {"companyName": "Test\"; DROP TABLE forms;--"}}'
+```
+
+**XSS Test:**
+```bash
+curl -X POST https://your-app.vercel.app/api/form/submit \
+  -H "Content-Type: application/json" \
+  -d '{"stage": 1, "data": {"companyName": "<script>alert(1)</script>"}}'
+```
+
+---
+
+## 📊 **Test Data Management**
+
+### **Test Database Setup**
+
+```typescript
+// tests/setup.ts
+import { createClient } from '@supabase/supabase-js';
+
+export const setupTestDB = async () => {
+  const supabase = createClient(
+    process.env.TEST_SUPABASE_URL!,
+    process.env.TEST_SUPABASE_KEY!
+  );
+  
+  // Clean existing data
+  await supabase.from('form_submissions').delete().neq('id', '');
+  await supabase.from('ghl_tokens').delete().neq('id', '');
+  
+  // Seed test data
+  await supabase.from('organizations').insert([
+    { id: 'test-org-1', name: 'Test Org 1' },
+    { id: 'test-org-2', name: 'Test Org 2' }
+  ]);
+};
+
+export const teardownTestDB = async () => {
+  // Clean up after tests
+};
+```
+
+### **Test Fixtures**
+
+```typescript
+// tests/fixtures/forms.ts
+export const validStage1Data = {
+  companyName: 'Test Company',
+  industry: 'technology',
+  employees: '11-50',
+  website: 'https://test.com',
+  description: 'Test description'
+};
+
+export const invalidStage1Data = {
+  companyName: '', // Missing required field
+  industry: 'invalid-industry'
+};
+```
+
+---
+
+## 🔄 **CI/CD Integration**
+
+### **GitHub Actions Workflow** (`.github/workflows/test.yml`)
+
+```yaml
+name: Test Suite
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run unit tests
+        run: npm run test:coverage
+      
+      - name: Run type checks
+        run: npm run type-check
+      
+      - name: Run lint
+        run: npm run lint
+      
+      - name: Build application
+        run: npm run build
+      
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/coverage-final.json
+  
+  e2e:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Install Playwright
+        run: npx playwright install --with-deps
+      
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          TEST_GHL_EMAIL: ${{ secrets.TEST_GHL_EMAIL }}
+          TEST_GHL_PASSWORD: ${{ secrets.TEST_GHL_PASSWORD }}
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: playwright-report
+          path: playwright-report/
+```
+
+---
+
+## 🐛 **Troubleshooting Tests**
+
+### **Common Issues**
+
+**Tests timing out:**
+```typescript
+// Increase timeout for slow tests
+jest.setTimeout(30000); // 30 seconds
+```
+
+**Database connection errors:**
+```bash
+# Check environment variables
+cat .env.test
+
+# Verify Supabase connection
+curl -I $TEST_SUPABASE_URL
+```
+
+**Flaky E2E tests:**
+```typescript
+// Add explicit waits
+await page.waitForSelector('[data-testid="form-loaded"]');
+await page.waitForLoadState('networkidle');
+```
+
+---
+
+## 📝 **Test Coverage Report**
+
+**Generate coverage report:**
+```bash
+npm run test:coverage
+```
+
+**View HTML report:**
+```bash
+open coverage/lcov-report/index.html
+```
+
+---
+
+**Last Updated:** January 27, 2026  
+**Version:** 1.0.0
