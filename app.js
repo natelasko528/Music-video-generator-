@@ -121,8 +121,8 @@ class MusicVideoApp {
         }
 
         // Load current values
-        document.getElementById('openaiKey').value = this.apiKeys.openai || '';
-        document.getElementById('zaiKey').value = this.apiKeys.zai || '';
+        document.getElementById('googleApiKey').value = this.apiKeys.google || '';
+        document.getElementById('googleProjectId').value = this.apiKeys.googleProjectId || '';
 
         modal.classList.add('active');
     }
@@ -136,8 +136,8 @@ class MusicVideoApp {
 
     saveSettingsForm() {
         try {
-            this.apiKeys.openai = document.getElementById('openaiKey').value.trim();
-            this.apiKeys.zai = document.getElementById('zaiKey').value.trim();
+            this.apiKeys.google = document.getElementById('googleApiKey').value.trim();
+            this.apiKeys.googleProjectId = document.getElementById('googleProjectId').value.trim();
 
             this.saveApiKeys();
             this.closeSettings();
@@ -158,7 +158,7 @@ class MusicVideoApp {
             return;
         }
 
-        if (this.apiKeys.openai && this.apiKeys.zai) {
+        if (this.apiKeys.google && this.apiKeys.googleProjectId) {
             welcomeScreen.style.display = 'none';
             mainApp.style.display = 'block';
             console.log('✅ API keys configured, showing main app');
@@ -211,7 +211,7 @@ class MusicVideoApp {
             }
 
             // Validate API keys
-            if (!this.apiKeys.openai || !this.apiKeys.zai) {
+            if (!this.apiKeys.google || !this.apiKeys.googleProjectId) {
                 throw new Error('Please configure your API keys first');
             }
 
